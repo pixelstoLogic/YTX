@@ -8,7 +8,7 @@ Install Node.js and Python 3, then run `npm install` and `npm start`. In develop
 
 ## Build the Windows installer
 
-Run `npm install`, then `npm run installer`. The output is `dist/YTX-Setup-1.1.8.exe`. It bundles the official Python 3.12.10 installer, an offline yt-dlp wheel, and FFmpeg. Setup installs Python and its isolated virtual environment in the app's resources when writable, and retries in `%LOCALAPPDATA%\YTX` if needed. Setup detects Premiere Pro and After Effects separately and asks which hosts should receive the YTX CEP bridge panel. It also asks whether to set up the extension in each detected Chrome, Edge, Brave, Opera, or Vivaldi installation. Chromium requires a one-time user confirmation: enable Developer mode and choose Load unpacked for the bundled YTX extension folder. Users do not need a separate Python, yt-dlp, or FFmpeg installation.
+Run `npm install`, then `npm run installer`. The output is `dist/YTX-Setup-1.1.9.exe`. It bundles the official Python 3.12.10 installer, an offline yt-dlp wheel, and FFmpeg. Setup installs Python and its isolated virtual environment in the app's resources when writable, and retries in `%LOCALAPPDATA%\YTX` if needed. The integrations page lists detected Premiere Pro, After Effects, Chrome, Edge, Brave, Opera, and Vivaldi with separate checkboxes. Selected Adobe hosts receive a host-specific YTX Bridge panel. The Adobe CEP developer-mode checkbox enables unsigned local panels for this Windows user; Adobe apps must be restarted afterward. Selected browsers open their extension pages and require a one-time Developer mode → Load unpacked confirmation. Users do not need a separate Python, yt-dlp, or FFmpeg installation.
 
 Copyright © 2026 ARYAN ARYA.
 
