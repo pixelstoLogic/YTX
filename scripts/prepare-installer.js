@@ -8,6 +8,7 @@ const pythonInstaller = path.join(bootstrap, 'python-installer', 'python-3.12.10
 const ffmpeg = path.join(root, 'build', 'resources', 'ffmpeg', 'ffmpeg.exe');
 const icon = path.join(root, 'build', 'ytx.ico');
 const bridge = path.join(root, 'build', 'resources', 'adobe-bridge');
+const browserExtension = path.join(root, 'build', 'resources', 'browser-extension');
 
 async function downloadFile(url, destination) {
   const response = await fetch(url, { redirect: 'follow' });
@@ -33,11 +34,17 @@ async function ensureBuildResources() {
     if (!wheel) throw new Error('PyPI did not provide a platform-independent yt-dlp wheel.');
     await downloadFile(wheel.url, path.join(wheels, wheel.filename));
   }
-  for (const required of [path.join(root, 'assets', 'ytx-mark.png'), path.join(bridge, 'CSXS', 'manifest.xml'), path.join(bridge, 'panel.js'), path.join(bridge, 'jsx', 'host.jsx'), path.join(root, 'build', 'resources', 'browser-extension', 'manifest.json'), path.join(root, 'build', 'resources', 'browser-extension', 'content.js'), path.join(root, 'build', 'resources', 'browser-extension', 'README.txt')]) {
+  for (const required of [path.join(root, 'assets', 'ytx-mark.png'), path.join(bridge, 'CSXS', 'manifest.xml'), path.join(bridge, 'CSXS', 'manifest-premiere.xml'), path.join(bridge, 'CSXS', 'manifest-aftereffects.xml'), path.join(bridge, 'panel.js'), path.join(bridge, 'jsx', 'host.jsx'), path.join(browserExtension, 'manifest.json'), path.join(browserExtension, 'content.js'), path.join(browserExtension, 'README.txt')]) {
     if (!fs.existsSync(required)) throw new Error(`Required source resource is missing: ${required}`);
   }
   fs.mkdirSync(path.dirname(ffmpeg), { recursive: true });
   fs.copyFileSync(require('ffmpeg-static'), ffmpeg);
+  fs.mkdirSync(path.join(browserExtension, 'icons'), { recursive: true });
+  for (const size of [16, 48, 128]) {
+    const iconPath = path.join(browserExtension, 'icons', `icon-${size}.png`);
+    const result = require('node:child_process').spawnSync(require('ffmpeg-static'), ['-y', '-i', path.join(root, 'assets', 'ytx-mark.png'), '-vf', `scale=${size}:${size}:force_original_aspect_ratio=decrease,pad=${size}:${size}:(ow-iw)/2:(oh-ih)/2:color=0x00000000`, '-frames:v', '1', iconPath], { windowsHide: true, stdio: 'ignore' });
+    if (result.status !== 0 || !fs.existsSync(iconPath)) throw new Error(`Could not create the ${size}px YTX browser extension icon.`);
+  }
 }
 
 async function main() {
