@@ -105,13 +105,62 @@
   CopyFiles /SILENT "$INSTDIR\resources\adobe-bridge\panel.css" "$APPDATA\Adobe\CEP\extensions\YTX-Bridge"
   CopyFiles /SILENT "$INSTDIR\resources\adobe-bridge\panel.js" "$APPDATA\Adobe\CEP\extensions\YTX-Bridge"
   CopyFiles /SILENT "$INSTDIR\resources\adobe-bridge\jsx\host.jsx" "$APPDATA\Adobe\CEP\extensions\YTX-Bridge\jsx"
+  StrCpy $R3 0
+  IfFileExists "$PROGRAMFILES64\Adobe\Adobe Premiere Pro 2026\Adobe Premiere Pro.exe" adobe_found
+  IfFileExists "$PROGRAMFILES64\Adobe\Adobe Premiere Pro 2025\Adobe Premiere Pro.exe" adobe_found
+  IfFileExists "$PROGRAMFILES64\Adobe\Adobe Premiere Pro 2024\Adobe Premiere Pro.exe" adobe_found
+  IfFileExists "$PROGRAMFILES64\Adobe\Adobe After Effects 2026\Support Files\AfterFX.exe" adobe_found
+  IfFileExists "$PROGRAMFILES64\Adobe\Adobe After Effects 2025\Support Files\AfterFX.exe" adobe_found
+  IfFileExists "$PROGRAMFILES64\Adobe\Adobe After Effects 2024\Support Files\AfterFX.exe" adobe_found
+  Goto adobe_prompt_done
+  adobe_found:
+  StrCpy $R3 1
+  MessageBox MB_YESNO|MB_ICONQUESTION "An Adobe Premiere Pro or After Effects installation was detected. Enable Adobe's local CEP extension compatibility so the installed YTX Bridge panel can load? Restart Adobe after setup, then open Window > Extensions (Legacy) > YTX Bridge." IDYES enable_cep IDNO adobe_prompt_done
+  enable_cep:
+  WriteRegDWORD HKCU "Software\Adobe\CSXS.10" "PlayerDebugMode" 1
+  WriteRegDWORD HKCU "Software\Adobe\CSXS.11" "PlayerDebugMode" 1
+  WriteRegDWORD HKCU "Software\Adobe\CSXS.12" "PlayerDebugMode" 1
+  WriteRegDWORD HKCU "Software\Adobe\CSXS.13" "PlayerDebugMode" 1
+  DetailPrint "Enabled local Adobe CEP compatibility for the YTX Bridge panel."
+  adobe_prompt_done:
   DetailPrint "Preparing the optional YTX YouTube helper for Chrome and Edge..."
   CreateDirectory "$LOCALAPPDATA\YTX\browser-extension"
   CopyFiles /SILENT "$INSTDIR\resources\browser-extension\manifest.json" "$LOCALAPPDATA\YTX\browser-extension"
   CopyFiles /SILENT "$INSTDIR\resources\browser-extension\content.js" "$LOCALAPPDATA\YTX\browser-extension"
   CopyFiles /SILENT "$INSTDIR\resources\browser-extension\README.txt" "$LOCALAPPDATA\YTX\browser-extension"
-  DetailPrint "Open Chrome or Edge extensions, enable Developer mode, then choose Load unpacked and select $LOCALAPPDATA\YTX\browser-extension."
-  DetailPrint "Adobe CEP developer mode was left unchanged; see YTX help to enable unsigned local panels if needed."
+  StrCpy $R3 ""
+  IfFileExists "$LOCALAPPDATA\Google\Chrome\Application\chrome.exe" chrome_found
+  IfFileExists "$PROGRAMFILES\Google\Chrome\Application\chrome.exe" chrome_found
+  IfFileExists "$PROGRAMFILES64\Microsoft\Edge\Application\msedge.exe" edge_found
+  IfFileExists "$LOCALAPPDATA\Microsoft\Edge\Application\msedge.exe" edge_found
+  IfFileExists "$LOCALAPPDATA\BraveSoftware\Brave-Browser\Application\brave.exe" brave_found
+  Goto browser_prompt_done
+  chrome_found:
+  StrCpy $R3 "chrome"
+  Goto browser_prompt
+  edge_found:
+  StrCpy $R3 "edge"
+  Goto browser_prompt
+  brave_found:
+  StrCpy $R3 "brave"
+  browser_prompt:
+  MessageBox MB_YESNO|MB_ICONQUESTION "A supported browser was detected. Open the YTX extension folder now? In the browser's Extensions page, enable Developer mode and choose Load unpacked. Select $LOCALAPPDATA\YTX\browser-extension. Chromium requires this one-time manual confirmation." IDYES open_browser_setup IDNO browser_prompt_done
+  open_browser_setup:
+  ExecShell "open" "$LOCALAPPDATA\YTX\browser-extension"
+  StrCmp $R3 "edge" open_edge
+  StrCmp $R3 "brave" open_brave
+  ExecShell "open" "chrome://extensions"
+  Goto browser_prompt_done
+  open_edge:
+  ExecShell "open" "microsoft-edge://extensions"
+  Goto browser_prompt_done
+  open_brave:
+  ExecShell "open" "brave://extensions"
+  browser_prompt_done:
+  CreateDirectory "$LOCALAPPDATA\YTX"
+  FileOpen $R4 "$LOCALAPPDATA\YTX\install-complete.flag" w
+  IfErrors +2
+  FileClose $R4
   RMDir /r "$INSTDIR\resources\bootstrap"
 !macroend
 
