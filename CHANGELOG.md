@@ -1,5 +1,9 @@
 # YTX Studio changelog
 
+## 1.1.6.5 — 2026-10-28
+
+- Test release: validates in-app update detection, changelog display, and installer handoff.
+
 ## 1.1.6 — 2026-10-28
 
 - Added H.264, H.265, AV1, VP9, ProRes, and MPEG-4 export choices with container compatibility checks.
@@ -12,4 +16,5 @@
 - Added Downloads Center and GitHub release update support.
 
 Copyright © 2026 ARYAN ARYA.
+
 
