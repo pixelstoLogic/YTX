@@ -97,7 +97,31 @@
     MessageBox MB_ICONSTOP "yt-dlp could not be installed from the bundled package (code $0). See $INSTDIR\python-install.log for setup details."
     Abort
   ${EndIf}
-  DetailPrint "Installing YTX Bridge panels for Adobe Premiere Pro and After Effects..."
+  StrCpy $R6 0
+  StrCpy $R7 0
+  IfFileExists "$PROGRAMFILES64\Adobe\Adobe Premiere Pro 2026\Adobe Premiere Pro.exe" adobe_premiere_found
+  IfFileExists "$PROGRAMFILES64\Adobe\Adobe Premiere Pro 2025\Adobe Premiere Pro.exe" adobe_premiere_found
+  IfFileExists "$PROGRAMFILES64\Adobe\Adobe Premiere Pro 2024\Adobe Premiere Pro.exe" adobe_premiere_found
+  Goto adobe_check_aftereffects
+  adobe_premiere_found:
+  MessageBox MB_YESNO|MB_ICONQUESTION "Premiere Pro was detected. Install the YTX Bridge panel for Premiere Pro?" IDYES install_premiere_bridge IDNO adobe_check_aftereffects
+  install_premiere_bridge:
+  StrCpy $R6 1
+  adobe_check_aftereffects:
+  IfFileExists "$PROGRAMFILES64\Adobe\Adobe After Effects 2026\Support Files\AfterFX.exe" adobe_aftereffects_found
+  IfFileExists "$PROGRAMFILES64\Adobe\Adobe After Effects 2025\Support Files\AfterFX.exe" adobe_aftereffects_found
+  IfFileExists "$PROGRAMFILES64\Adobe\Adobe After Effects 2024\Support Files\AfterFX.exe" adobe_aftereffects_found
+  Goto adobe_choices_done
+  adobe_aftereffects_found:
+  MessageBox MB_YESNO|MB_ICONQUESTION "After Effects was detected. Install the YTX Bridge panel for After Effects?" IDYES install_aftereffects_bridge IDNO adobe_choices_done
+  install_aftereffects_bridge:
+  StrCpy $R7 1
+  adobe_choices_done:
+  StrCmp $R6 "1" install_adobe_bridge
+  StrCmp $R7 "1" install_adobe_bridge
+  Goto adobe_prompt_done
+  install_adobe_bridge:
+  DetailPrint "Installing the selected YTX Bridge Adobe panel(s)..."
   CreateDirectory "$APPDATA\Adobe\CEP\extensions\YTX-Bridge\CSXS"
   CreateDirectory "$APPDATA\Adobe\CEP\extensions\YTX-Bridge\jsx"
   CopyFiles /SILENT "$INSTDIR\resources\adobe-bridge\CSXS\manifest.xml" "$APPDATA\Adobe\CEP\extensions\YTX-Bridge\CSXS"
@@ -105,17 +129,7 @@
   CopyFiles /SILENT "$INSTDIR\resources\adobe-bridge\panel.css" "$APPDATA\Adobe\CEP\extensions\YTX-Bridge"
   CopyFiles /SILENT "$INSTDIR\resources\adobe-bridge\panel.js" "$APPDATA\Adobe\CEP\extensions\YTX-Bridge"
   CopyFiles /SILENT "$INSTDIR\resources\adobe-bridge\jsx\host.jsx" "$APPDATA\Adobe\CEP\extensions\YTX-Bridge\jsx"
-  StrCpy $R3 0
-  IfFileExists "$PROGRAMFILES64\Adobe\Adobe Premiere Pro 2026\Adobe Premiere Pro.exe" adobe_found
-  IfFileExists "$PROGRAMFILES64\Adobe\Adobe Premiere Pro 2025\Adobe Premiere Pro.exe" adobe_found
-  IfFileExists "$PROGRAMFILES64\Adobe\Adobe Premiere Pro 2024\Adobe Premiere Pro.exe" adobe_found
-  IfFileExists "$PROGRAMFILES64\Adobe\Adobe After Effects 2026\Support Files\AfterFX.exe" adobe_found
-  IfFileExists "$PROGRAMFILES64\Adobe\Adobe After Effects 2025\Support Files\AfterFX.exe" adobe_found
-  IfFileExists "$PROGRAMFILES64\Adobe\Adobe After Effects 2024\Support Files\AfterFX.exe" adobe_found
-  Goto adobe_prompt_done
-  adobe_found:
-  StrCpy $R3 1
-  MessageBox MB_YESNO|MB_ICONQUESTION "An Adobe Premiere Pro or After Effects installation was detected. Enable Adobe's local CEP extension compatibility so the installed YTX Bridge panel can load? Restart Adobe after setup, then open Window > Extensions (Legacy) > YTX Bridge." IDYES enable_cep IDNO adobe_prompt_done
+  MessageBox MB_YESNO|MB_ICONQUESTION "Enable Adobe's local CEP extension compatibility for YTX Bridge? Restart selected Adobe apps after setup, then open Window > Extensions (Legacy) > YTX Bridge." IDYES enable_cep IDNO adobe_prompt_done
   enable_cep:
   WriteRegDWORD HKCU "Software\Adobe\CSXS.10" "PlayerDebugMode" 1
   WriteRegDWORD HKCU "Software\Adobe\CSXS.11" "PlayerDebugMode" 1
@@ -131,30 +145,29 @@
   StrCpy $R3 ""
   IfFileExists "$LOCALAPPDATA\Google\Chrome\Application\chrome.exe" chrome_found
   IfFileExists "$PROGRAMFILES\Google\Chrome\Application\chrome.exe" chrome_found
+  Goto browser_check_edge
+  chrome_found:
+  MessageBox MB_YESNO|MB_ICONQUESTION "Google Chrome is installed. Set up the YTX YouTube helper in Chrome? The browser will ask you to confirm Load unpacked once." IDYES chrome_setup IDNO browser_check_edge
+  chrome_setup:
+  ExecShell "open" "$LOCALAPPDATA\YTX\browser-extension"
+  ExecShell "open" "chrome://extensions"
+  browser_check_edge:
   IfFileExists "$PROGRAMFILES64\Microsoft\Edge\Application\msedge.exe" edge_found
   IfFileExists "$LOCALAPPDATA\Microsoft\Edge\Application\msedge.exe" edge_found
-  IfFileExists "$LOCALAPPDATA\BraveSoftware\Brave-Browser\Application\brave.exe" brave_found
-  Goto browser_prompt_done
-  chrome_found:
-  StrCpy $R3 "chrome"
-  Goto browser_prompt
+  Goto browser_check_brave
   edge_found:
-  StrCpy $R3 "edge"
-  Goto browser_prompt
-  brave_found:
-  StrCpy $R3 "brave"
-  browser_prompt:
-  MessageBox MB_YESNO|MB_ICONQUESTION "A supported browser was detected. Open the YTX extension folder now? In the browser's Extensions page, enable Developer mode and choose Load unpacked. Select $LOCALAPPDATA\YTX\browser-extension. Chromium requires this one-time manual confirmation." IDYES open_browser_setup IDNO browser_prompt_done
-  open_browser_setup:
+  MessageBox MB_YESNO|MB_ICONQUESTION "Microsoft Edge is installed. Set up the YTX YouTube helper in Edge? The browser will ask you to confirm Load unpacked once." IDYES edge_setup IDNO browser_check_brave
+  edge_setup:
   ExecShell "open" "$LOCALAPPDATA\YTX\browser-extension"
-  StrCmp $R3 "edge" open_edge
-  StrCmp $R3 "brave" open_brave
-  ExecShell "open" "chrome://extensions"
-  Goto browser_prompt_done
-  open_edge:
   ExecShell "open" "microsoft-edge://extensions"
+  browser_check_brave:
+  IfFileExists "$LOCALAPPDATA\BraveSoftware\Brave-Browser\Application\brave.exe" brave_found
+  IfFileExists "$PROGRAMFILES64\BraveSoftware\Brave-Browser\Application\brave.exe" brave_found
   Goto browser_prompt_done
-  open_brave:
+  brave_found:
+  MessageBox MB_YESNO|MB_ICONQUESTION "Brave is installed. Set up the YTX YouTube helper in Brave? The browser will ask you to confirm Load unpacked once." IDYES brave_setup IDNO browser_prompt_done
+  brave_setup:
+  ExecShell "open" "$LOCALAPPDATA\YTX\browser-extension"
   ExecShell "open" "brave://extensions"
   browser_prompt_done:
   CreateDirectory "$LOCALAPPDATA\YTX"
