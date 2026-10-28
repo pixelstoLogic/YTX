@@ -64,7 +64,7 @@ if (nsisSource.includes('SetDetailsPrint none')) {
 } else if (!nsisSource.includes('SetDetailsPrint both')) {
   throw new Error('Could not enable file-level NSIS extraction details in the electron-builder template.');
 }
-console.log('Installer resources ready: bundled Python, yt-dlp, FFmpeg, Adobe CEP bridge, and Chrome/Edge extension.');
+console.log('Installer resources ready: bundled Python, yt-dlp, FFmpeg, Adobe CEP bridge, and Chromium browser extension.');
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });
