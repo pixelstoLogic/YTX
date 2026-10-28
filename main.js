@@ -42,10 +42,13 @@ function acceptProtocolUrl(raw) {
     if (mainWindow) { mainWindow.show(); mainWindow.focus(); flushProtocolUrl(); }
   } catch {}
 }
+function protocolArgument(argv) {
+  return argv.map(arg => String(arg).replace(/^['"]|['"]$/g, '')).find(arg => /^ytx:\/\//i.test(arg));
+}
 function flushProtocolUrl() { if (!pendingVideoUrl || !mainWindow || mainWindow.isDestroyed()) return; mainWindow.webContents.send('app:protocol-video', pendingVideoUrl); pendingVideoUrl = ''; }
 if (!app.requestSingleInstanceLock()) app.quit();
-else app.on('second-instance', (_event, argv) => { const url = argv.find(arg => arg.startsWith('ytx://')); if (url) acceptProtocolUrl(url); if (mainWindow) { mainWindow.show(); mainWindow.focus(); } });
-if (process.platform === 'win32') { const url = process.argv.find(arg => arg.startsWith('ytx://')); if (url) acceptProtocolUrl(url); }
+else app.on('second-instance', (_event, argv) => { const url = protocolArgument(argv); if (url) acceptProtocolUrl(url); if (mainWindow) { mainWindow.show(); mainWindow.focus(); } });
+if (process.platform === 'win32') { const url = protocolArgument(process.argv); if (url) acceptProtocolUrl(url); }
 app.on('open-url', (event, url) => { event.preventDefault(); acceptProtocolUrl(url); });
 
 function createWindow(hidden = false) {
@@ -334,7 +337,9 @@ function startAdobeBridge() {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', () => {
       adobeBridgePort = server.address().port;
-      const configDir = path.join(app.getPath('appData'), 'Adobe', 'YTX');
+      // Keep settings beside the installed CEP panel so every Adobe host can
+      // read the same live port/token without depending on CEP's host-specific userData path.
+      const configDir = path.join(app.getPath('appData'), 'Adobe', 'CEP', 'extensions', 'YTX-Bridge');
       fs.mkdirSync(configDir, { recursive: true });
       fs.writeFileSync(path.join(configDir, 'bridge.json'), JSON.stringify({ port: adobeBridgePort, token: adobeBridgeToken }), 'utf8');
       resolve();
