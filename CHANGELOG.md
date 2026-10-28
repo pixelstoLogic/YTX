@@ -1,5 +1,12 @@
 # YTX Studio changelog
 
+## 1.1.8 — 2026-10-28
+
+- Fixed YTX Bridge startup in Premiere Pro and After Effects by using CEP's documented `userData` system path.
+- Added separate setup choices for each detected Premiere Pro, After Effects, Chrome, Edge, and Brave installation.
+- Made Adobe panel installation conditional on the selected host apps.
+- Clarified the one-time browser confirmation needed to load the local extension.
+
 ## 1.1.7 — 2026-10-28
 
 - Added a dedicated conversion workspace with conversion-only progress and results.
