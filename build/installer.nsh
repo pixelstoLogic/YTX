@@ -129,13 +129,7 @@
   CopyFiles /SILENT "$INSTDIR\resources\adobe-bridge\panel.css" "$APPDATA\Adobe\CEP\extensions\YTX-Bridge"
   CopyFiles /SILENT "$INSTDIR\resources\adobe-bridge\panel.js" "$APPDATA\Adobe\CEP\extensions\YTX-Bridge"
   CopyFiles /SILENT "$INSTDIR\resources\adobe-bridge\jsx\host.jsx" "$APPDATA\Adobe\CEP\extensions\YTX-Bridge\jsx"
-  MessageBox MB_YESNO|MB_ICONQUESTION "Enable Adobe's local CEP extension compatibility for YTX Bridge? Restart selected Adobe apps after setup, then open Window > Extensions (Legacy) > YTX Bridge." IDYES enable_cep IDNO adobe_prompt_done
-  enable_cep:
-  WriteRegDWORD HKCU "Software\Adobe\CSXS.10" "PlayerDebugMode" 1
-  WriteRegDWORD HKCU "Software\Adobe\CSXS.11" "PlayerDebugMode" 1
-  WriteRegDWORD HKCU "Software\Adobe\CSXS.12" "PlayerDebugMode" 1
-  WriteRegDWORD HKCU "Software\Adobe\CSXS.13" "PlayerDebugMode" 1
-  DetailPrint "Enabled local Adobe CEP compatibility for the YTX Bridge panel."
+  MessageBox MB_OK|MB_ICONINFORMATION "YTX Bridge was installed for the selected Adobe host(s). Restart Adobe and open Window > Extensions (Legacy) > YTX Bridge. If Adobe hides the unsigned local panel, follow Adobe's CEP developer-mode instructions for your host version."
   adobe_prompt_done:
   DetailPrint "Preparing the optional YTX YouTube helper for Chrome and Edge..."
   CreateDirectory "$LOCALAPPDATA\YTX\browser-extension"
@@ -145,6 +139,7 @@
   StrCpy $R3 ""
   IfFileExists "$LOCALAPPDATA\Google\Chrome\Application\chrome.exe" chrome_found
   IfFileExists "$PROGRAMFILES\Google\Chrome\Application\chrome.exe" chrome_found
+  IfFileExists "$PROGRAMFILES32\Google\Chrome\Application\chrome.exe" chrome_found
   Goto browser_check_edge
   chrome_found:
   MessageBox MB_YESNO|MB_ICONQUESTION "Google Chrome is installed. Set up the YTX YouTube helper in Chrome? The browser will ask you to confirm Load unpacked once." IDYES chrome_setup IDNO browser_check_edge
@@ -153,6 +148,7 @@
   ExecShell "open" "chrome://extensions"
   browser_check_edge:
   IfFileExists "$PROGRAMFILES64\Microsoft\Edge\Application\msedge.exe" edge_found
+  IfFileExists "$PROGRAMFILES32\Microsoft\Edge\Application\msedge.exe" edge_found
   IfFileExists "$LOCALAPPDATA\Microsoft\Edge\Application\msedge.exe" edge_found
   Goto browser_check_brave
   edge_found:
@@ -163,12 +159,33 @@
   browser_check_brave:
   IfFileExists "$LOCALAPPDATA\BraveSoftware\Brave-Browser\Application\brave.exe" brave_found
   IfFileExists "$PROGRAMFILES64\BraveSoftware\Brave-Browser\Application\brave.exe" brave_found
-  Goto browser_prompt_done
+  IfFileExists "$PROGRAMFILES32\BraveSoftware\Brave-Browser\Application\brave.exe" brave_found
+  Goto browser_check_opera
   brave_found:
-  MessageBox MB_YESNO|MB_ICONQUESTION "Brave is installed. Set up the YTX YouTube helper in Brave? The browser will ask you to confirm Load unpacked once." IDYES brave_setup IDNO browser_prompt_done
+  MessageBox MB_YESNO|MB_ICONQUESTION "Brave is installed. Set up the YTX YouTube helper in Brave? The browser will ask you to confirm Load unpacked once." IDYES brave_setup IDNO browser_check_opera
   brave_setup:
   ExecShell "open" "$LOCALAPPDATA\YTX\browser-extension"
   ExecShell "open" "brave://extensions"
+  browser_check_opera:
+  IfFileExists "$LOCALAPPDATA\Programs\Opera\launcher.exe" opera_found
+  IfFileExists "$PROGRAMFILES64\Opera\launcher.exe" opera_found
+  IfFileExists "$PROGRAMFILES32\Opera\launcher.exe" opera_found
+  Goto browser_check_vivaldi
+  opera_found:
+  MessageBox MB_YESNO|MB_ICONQUESTION "Opera is installed. Set up the YTX YouTube helper in Opera? The browser will ask you to confirm Load unpacked once." IDYES opera_setup IDNO browser_check_vivaldi
+  opera_setup:
+  ExecShell "open" "$LOCALAPPDATA\YTX\browser-extension"
+  ExecShell "open" "opera://extensions"
+  browser_check_vivaldi:
+  IfFileExists "$LOCALAPPDATA\Vivaldi\Application\vivaldi.exe" vivaldi_found
+  IfFileExists "$PROGRAMFILES64\Vivaldi\Application\vivaldi.exe" vivaldi_found
+  IfFileExists "$PROGRAMFILES32\Vivaldi\Application\vivaldi.exe" vivaldi_found
+  Goto browser_prompt_done
+  vivaldi_found:
+  MessageBox MB_YESNO|MB_ICONQUESTION "Vivaldi is installed. Set up the YTX YouTube helper in Vivaldi? The browser will ask you to confirm Load unpacked once." IDYES vivaldi_setup IDNO browser_prompt_done
+  vivaldi_setup:
+  ExecShell "open" "$LOCALAPPDATA\YTX\browser-extension"
+  ExecShell "open" "vivaldi://extensions"
   browser_prompt_done:
   CreateDirectory "$LOCALAPPDATA\YTX"
   FileOpen $R4 "$LOCALAPPDATA\YTX\install-complete.flag" w
