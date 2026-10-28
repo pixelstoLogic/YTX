@@ -2,7 +2,7 @@ name: Build YTX release installer
 
 on:
   release:
-    types: [published]
+    types: [published, edited]
 
 permissions:
   contents: write
