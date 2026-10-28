@@ -60,10 +60,20 @@ function createWindow(hidden = false) {
   return win;
 }
 app.whenReady().then(() => {
-  const updateState = readUpdateState();
-  if (updateState.pending && !isNewerVersion(updateState.pending.version, app.getVersion())) {
-    writeUpdateState({ installed: updateState.pending, installedAt: new Date().toISOString() });
+  const updateState = readUpdateState(), currentVersion = app.getVersion();
+  let installed = updateState.installed, installedAt = updateState.installedAt;
+  if (updateState.pending && !isNewerVersion(updateState.pending.version, currentVersion)) {
+    installed = updateState.pending; installedAt = new Date().toISOString();
+  } else if (updateState.lastRunVersion && isNewerVersion(currentVersion, updateState.lastRunVersion)) {
+    let notes = '';
+    try {
+      const lines = fs.readFileSync(path.join(__dirname, 'CHANGELOG.md'), 'utf8').split(/\r?\n/);
+      const heading = lines.findIndex(line => line.startsWith(`## ${currentVersion}`));
+      if (heading >= 0) { const next = lines.findIndex((line, i) => i > heading && line.startsWith('## ')); notes = lines.slice(heading + 1, next < 0 ? undefined : next).join('\n').trim(); }
+    } catch {}
+    installed = { version: currentVersion, notes, name: `YTX ${currentVersion}` }; installedAt = new Date().toISOString();
   }
+  writeUpdateState({ installed, installedAt, lastRunVersion: currentVersion });
   preferences = loadPreferences();
   app.setAsDefaultProtocolClient('ytx');
   createTray();
