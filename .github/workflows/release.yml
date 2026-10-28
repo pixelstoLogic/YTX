@@ -20,8 +20,10 @@ jobs:
           cache: npm
       - name: Install Node dependencies
         run: npm ci
+      - name: Prepare Windows installer resources
+        run: npm run prepare:installer
       - name: Build Windows installer
-        run: npm run installer
+        run: npx electron-builder --win nsis --x64 --publish never
       - name: Attach installer to published release
         shell: pwsh
         env:
