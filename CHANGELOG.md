@@ -1,5 +1,14 @@
 # YTX Studio changelog
 
+## 1.1.9 — 2026-10-28
+
+- Replaced repeated setup questions with one detected-app selection page showing colored app badges, names, and checkboxes.
+- Made Adobe setup honor separate Premiere Pro and After Effects selections with host-specific CEP manifests.
+- Fixed the CEP bridge settings path and Premiere playhead tick handling.
+- Corrected Adobe CEP developer-mode registry values to the string type and added a visible opt-in checkbox.
+- Added browser extension icons and support for bare and mobile YouTube URLs.
+- Made setup open extension pages for every selected browser.
+
 ## 1.1.8 — 2026-10-28
 
 - Fixed YTX Bridge startup in Premiere Pro and After Effects by using CEP's documented `userData` system path.
