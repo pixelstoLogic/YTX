@@ -10,13 +10,21 @@ contextBridge.exposeInMainWorld('studio', {
   revealFile: filePath => ipcRenderer.invoke('media:reveal-file', filePath),
   getChangelog: () => ipcRenderer.invoke('app:get-changelog'),
   checkUpdates: () => ipcRenderer.invoke('app:check-updates'),
-  downloadUpdate: asset => ipcRenderer.invoke('app:download-update', asset),
+  listReleases: () => ipcRenderer.invoke('app:list-releases'),
+  downloadUpdate: request => ipcRenderer.invoke('app:download-update', request),
+  downloadRelease: request => ipcRenderer.invoke('app:download-release', request),
   openInstaller: filePath => ipcRenderer.invoke('app:open-installer', filePath),
   openRelease: url => ipcRenderer.invoke('app:open-release', url),
   getSystemStatus: () => ipcRenderer.invoke('app:system-status'),
   getAdobeStatus: () => ipcRenderer.invoke('media:adobe-status'),
   getProjectMedia: target => ipcRenderer.invoke('media:project-media', target),
   openBrowserExtension: () => ipcRenderer.invoke('media:open-browser-extension'),
+  installBrowserExtension: options => ipcRenderer.invoke('integrations:install-browser-extension', options || {}),
+  removeBrowserExtension: () => ipcRenderer.invoke('integrations:remove-browser-extension'),
+  repairAdobeBridge: options => ipcRenderer.invoke('integrations:repair-adobe', options || {}),
+  detectIntegrations: () => ipcRenderer.invoke('integrations:detect'),
+  getIntegrationStatus: () => ipcRenderer.invoke('integrations:status'),
+  getIntegrationDiagnostics: () => ipcRenderer.invoke('integrations:diagnostics'),
   getPreferences: () => ipcRenderer.invoke('app:get-preferences'),
   setPreferences: options => ipcRenderer.invoke('app:preferences', options),
   scanSystem: () => ipcRenderer.invoke('app:system-scan'),
@@ -25,4 +33,3 @@ contextBridge.exposeInMainWorld('studio', {
   onTaskProgress: callback => { ipcRenderer.removeAllListeners('task:progress'); ipcRenderer.on('task:progress', (_event, data) => callback(data)); },
   onAdobeHandoff: callback => { ipcRenderer.removeAllListeners('adobe:handoff'); ipcRenderer.on('adobe:handoff', (_event, data) => callback(data)); }
 });
-

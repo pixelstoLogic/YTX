@@ -2,8 +2,14 @@ name: Build and publish YTX release
 
 on:
   push:
-    branches:
-      - 'release/**'
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build, for example 1.2.0 (must match package.json)'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -14,21 +20,74 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          fetch-depth: 0
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
+
       - name: Install Node dependencies
         run: npm ci
+
+      - name: Resolve and verify release version
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version.Trim()
+          if ('${{ github.event_name }}' -eq 'workflow_dispatch' -and '${{ inputs.version }}' -ne $version) {
+            throw "Requested version '${{ inputs.version }}' does not match package.json ($version)."
+          }
+          if ('${{ github.event_name }}' -eq 'push' -and '${{ github.ref_name }}' -ne "v$version") {
+            throw "Tag '${{ github.ref_name }}' does not match package.json ($version)."
+          }
+          "YTX_VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Require the extension signing key
+        shell: pwsh
+        env:
+          YTX_EXTENSION_KEY: ${{ secrets.YTX_EXTENSION_KEY }}
+        run: |
+          if (-not $env:YTX_EXTENSION_KEY -and -not (Test-Path 'build/keys/ytx-extension-key.pem')) {
+            throw 'The extension signing key is not available. Add it as the YTX_EXTENSION_KEY repository secret (Settings > Secrets and variables > Actions) so every release keeps extension ID ibbnkdcefianlglmenklhmcoeiolpjjb. The key file is gitignored on purpose.'
+          }
+
+      - name: Package and verify the signed browser extension
+        env:
+          YTX_EXTENSION_KEY: ${{ secrets.YTX_EXTENSION_KEY }}
+        run: |
+          npm run package:extension
+          npm run verify:extension
+          npm run verify:release -- v$env:YTX_VERSION
+
       - name: Build Windows installer
         run: npm run prepare:installer; npx electron-builder --win nsis --x64 --publish never
-      - name: Create GitHub release and upload installer
+
+      - name: Create checksums and release notes
+        run: npm run release:assets
+
+      - name: Create GitHub release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $version = $env:YTX_VERSION
           $tag = "v$version"
-          gh release create $tag "dist/YTX-Setup-$version.exe" --target main --title "YTX Studio $version" --notes-file CHANGELOG.md
-
+          $current = [version]$version
+          $newer = gh api "repos/${{ github.repository }}/releases?per_page=100" --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name' | ForEach-Object {
+            $candidate = $_.TrimStart('v')
+            try { if ([version]$candidate -gt $current) { $candidate } } catch {}
+          }
+          $latestFlag = if ($newer) { '--latest=false' } else { '--latest' }
+          $assets = @("dist/YTX-Setup-$version.exe", "dist/ytx-extension.crx", "dist/updates.xml", "dist/SHA256SUMS.txt")
+          if ($newer) { Write-Host "Publishing as a historical release; newer build(s) exist: $($newer -join ', ')" }
+          gh release view $tag --json tagName 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $assets --clobber
+            gh release edit $tag --title "YTX Studio $version" --notes-file dist/release-notes.md $latestFlag
+          } else {
+            gh release create $tag $assets `
+              --title "YTX Studio $version" `
+              --notes-file dist/release-notes.md `
+              $latestFlag
+          }
+          gh release view $tag --json url --jq .url >> $env:GITHUB_STEP_SUMMARY

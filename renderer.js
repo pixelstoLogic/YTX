@@ -373,29 +373,69 @@ document.addEventListener('keydown', event => { if (event.key === 'Escape') clos
 $('clearTransfers').onclick = () => { for (let i = transferHistory.length - 1; i >= 0; i--) if (transferHistory[i].state !== 'active') transferHistory.splice(i, 1); saveTransferHistory(); renderTransfers(); };
 let releaseInfo = null, installerPath = '';
 function setUpdateBadge(show) { $('updateBadge').classList.toggle('hidden', !show); $('updateTabBadge').classList.toggle('hidden', !show); }
+function renderReleaseHistory(releases) {
+  const panel = $('releaseHistory'), list = $('releaseHistoryList');
+  if (!Array.isArray(releases) || !releases.length) { panel.classList.add('hidden'); return; }
+  panel.classList.remove('hidden'); list.replaceChildren();
+  for (const release of releases) {
+    const row = document.createElement('div'); row.className = 'release-version' + (release.current ? ' current' : '');
+    const meta = document.createElement('div'); meta.className = 'release-version-meta';
+    const title = document.createElement('strong'); title.textContent = `YTX ${release.version}`;
+    if (release.current) { const badge = document.createElement('span'); badge.className = 'release-badge'; badge.textContent = 'INSTALLED'; title.appendChild(badge); }
+    else if (release.version === releaseInfo?.latestVersion) { const badge = document.createElement('span'); badge.className = 'release-badge'; badge.textContent = 'LATEST'; title.appendChild(badge); }
+    const date = document.createElement('small'); date.textContent = release.publishedAt ? new Date(release.publishedAt).toLocaleDateString() : 'Release';
+    meta.append(title, date);
+    const action = document.createElement('button'); action.className = 'release-download';
+    if (!release.asset) { action.textContent = 'No installer'; action.disabled = true; }
+    else if (release.current) {
+      action.textContent = 'Reinstall';
+      action.addEventListener('click', () => downloadReleaseVersion(release, false));
+    } else {
+      const isLatest = release.version === releaseInfo?.latestVersion;
+      action.textContent = isLatest ? 'Install latest' : 'Download';
+      action.addEventListener('click', () => downloadReleaseVersion(release, isLatest));
+    }
+    row.append(meta, action);
+    list.appendChild(row);
+  }
+}
+async function downloadReleaseVersion(release, installLatest) {
+  if (!release?.asset) return;
+  $('updateDownloadProgress').hidden = false; $('updateProgressFill').style.width = '3%'; $('updateProgressPercent').textContent = '0%';
+  $('updateStatus').textContent = `Downloading YTX ${release.version}…`;
+  $('downloadUpdateBtn').disabled = true;
+  try {
+    const result = await window.studio.downloadRelease({ version: release.version, install: Boolean(installLatest) });
+    if (result.error) throw Error(result.error);
+    installerPath = result.path;
+    $('updateStatus').textContent = result.installing
+      ? `Download verified${result.digestVerified ? ' (SHA-256)' : ''}. Starting the YTX ${release.version} installer now—approve any Windows prompt to finish.`
+      : `Verified YTX ${release.version} installer saved to ${installerPath}. Open it when you are ready to roll back or reinstall.`;
+    if (!result.installing) $('openInstallerBtn').classList.remove('hidden');
+  } catch (error) { $('updateStatus').textContent = error.message; }
+  finally { $('downloadUpdateBtn').disabled = false; }
+}
 async function checkReleaseUpdate() {
   $('updateStatus').textContent = 'Checking GitHub releases…'; $('checkUpdatesBtn').disabled = true;
   try {
     releaseInfo = await window.studio.checkUpdates();
     if (releaseInfo.error) throw Error(releaseInfo.error);
-    $('updateVersion').textContent = `Installed version ${releaseInfo.currentVersion || '1.1.5'}`;
+    $('updateVersion').textContent = `Installed version ${releaseInfo.currentVersion || 'unknown'}`;
     $('updateTitle').textContent = releaseInfo.updated ? `YTX updated to ${releaseInfo.latestVersion}` : releaseInfo.available ? `YTX ${releaseInfo.latestVersion} is available` : 'You’re up to date';
-    $('updateStatus').textContent = releaseInfo.updated ? `Update installed successfully. ${releaseInfo.message || ''}` : releaseInfo.available ? (releaseInfo.asset ? `${releaseInfo.asset.name} is ready to download from GitHub.` : 'This release has no YTX installer asset yet.') : releaseInfo.message || `Latest checked version: ${releaseInfo.latestVersion || releaseInfo.currentVersion}.`;
+    $('updateStatus').textContent = releaseInfo.updated ? `Update installed successfully. ${releaseInfo.message || ''}` : releaseInfo.available ? (releaseInfo.asset ? `${releaseInfo.asset.name} is the latest published build. YTX downloads that release, not a cached or older installer.` : 'This release has no YTX installer asset yet.') : releaseInfo.message || `Latest published version: ${releaseInfo.latestVersion || releaseInfo.currentVersion}.`;
     $('openReleaseBtn').classList.toggle('hidden', !releaseInfo.url);
     $('downloadUpdateBtn').classList.toggle('hidden', !(releaseInfo.available && releaseInfo.asset));
     $('updateNotes').textContent = releaseInfo.notes || 'No release notes were published.'; $('updateNotes').classList.remove('hidden');
+    renderReleaseHistory(releaseInfo.releases);
     if (releaseInfo.updated) { $('changelogVersion').textContent = `YTX ${releaseInfo.latestVersion} · just installed`; $('changelogText').textContent = releaseInfo.notes || 'No release notes were published.'; }
     setUpdateBadge(Boolean(releaseInfo.available));
   } catch (error) { $('updateTitle').textContent = 'Update check unavailable'; $('updateStatus').textContent = error.message; setUpdateBadge(false); }
   finally { $('checkUpdatesBtn').disabled = false; }
 }
 $('checkUpdatesBtn').onclick = checkReleaseUpdate;
-$('downloadUpdateBtn').onclick = async () => {
-  if (!releaseInfo?.asset) return;
-  $('downloadUpdateBtn').disabled = true; $('updateDownloadProgress').hidden = false; $('updateProgressFill').style.width = '3%'; $('updateProgressPercent').textContent = '0%'; $('updateStatus').textContent = 'Downloading update…';
-  try { const result = await window.studio.downloadUpdate({ ...releaseInfo.asset, latestVersion: releaseInfo.latestVersion, notes: releaseInfo.notes }); if (result.error) throw Error(result.error); installerPath = result.path; $('updateStatus').textContent = result.installing ? 'Download verified. Starting the installer now—approve any Windows prompt to finish the update.' : `Verified installer saved to ${installerPath}`; if (!result.installing) $('openInstallerBtn').classList.remove('hidden'); }
-  catch (error) { $('updateStatus').textContent = error.message; }
-  finally { $('downloadUpdateBtn').disabled = false; }
+$('downloadUpdateBtn').onclick = () => {
+  const latest = releaseInfo?.releases?.find(release => release.version === releaseInfo.latestVersion);
+  if (latest?.asset) downloadReleaseVersion(latest, true);
 };
 $('openInstallerBtn').onclick = async () => { const result = await window.studio.openInstaller(installerPath); if (result.error) $('updateStatus').textContent = result.error; };
 $('openReleaseBtn').onclick = () => releaseInfo?.url && window.studio.openRelease(releaseInfo.url);
@@ -433,9 +473,30 @@ $('startupToggle').addEventListener('change', async () => {
   const enabled = $('startupToggle').checked;
   await window.studio.setPreferences({ openAtLogin: enabled, keepInTray: enabled });
 });
+$('installBrowserExtensionBtn').onclick = async () => {
+  $('installBrowserExtensionBtn').disabled = true;
+  $('systemSummary').textContent = 'Registering the signed YTX extension in detected Chromium browsers…';
+  try {
+    const result = await window.studio.installBrowserExtension({});
+    if (result.error) throw Error(result.error);
+    $('systemSummary').textContent = result.message || (result.ok ? 'Browser extension registered. Restart the browser once.' : 'No supported browser was found.');
+    if (!result.ok && result.path) $('systemSummary').textContent += ' Extension folder: ' + result.path;
+  } catch (error) { $('systemSummary').textContent = `Automatic install failed: ${error.message}`; }
+  finally { $('installBrowserExtensionBtn').disabled = false; }
+};
+$('repairAdobeBridgeBtn').onclick = async () => {
+  $('repairAdobeBridgeBtn').disabled = true;
+  $('systemSummary').textContent = 'Repairing the YTX Bridge panel and Adobe CEP connection…';
+  try {
+    const result = await window.studio.repairAdobeBridge({});
+    if (result.error) throw Error(result.error);
+    $('systemSummary').textContent = result.message || 'YTX Bridge repaired. Restart Adobe and reopen the panel.';
+  } catch (error) { $('systemSummary').textContent = `Adobe bridge repair failed: ${error.message}`; }
+  finally { $('repairAdobeBridgeBtn').disabled = false; }
+};
 $('openBrowserExtensionBtn').onclick = async () => {
   const result = await window.studio.openBrowserExtension();
-  $('systemSummary').textContent = result.error ? `Could not open folder: ${result.error}` : `In Chrome/Edge, enable Developer mode → Load unpacked → choose ${result.path}`;
+  $('systemSummary').textContent = result.error ? `Could not open folder: ${result.error}` : `Fallback folder: ${result.path}`;
 };
 syncCodecCompatibility();
 $('scanSystemBtn').onclick = async () => {
@@ -463,4 +524,3 @@ async function startup() {
   } catch { $('splashMessage').textContent = 'YTX is starting…'; setTimeout(() => $('splash').classList.add('splash-hidden'), 1800); }
 }
 startup();
-

@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { packageExtension } = require('./package-extension');
 
 const root = path.resolve(__dirname, '..');
 const bootstrap = path.join(root, 'build', 'resources', 'bootstrap');
@@ -49,6 +50,8 @@ async function ensureBuildResources() {
 
 async function main() {
 await ensureBuildResources();
+const extension = packageExtension();
+console.log(`Browser extension ready: ${extension.version} (${extension.extensionId}).`);
 const ffmpegBin = require('ffmpeg-static');
 const pngPath = path.join(root, 'build', 'ytx-256.png');
 const image = require('node:child_process').spawnSync(ffmpegBin, ['-y', '-i', path.join(root, 'assets', 'ytx-mark.png'), '-vf', 'scale=256:256:force_original_aspect_ratio=decrease,pad=256:256:(ow-iw)/2:(oh-ih)/2:color=0x00000000', '-frames:v', '1', pngPath], { windowsHide: true, stdio: 'ignore' });
@@ -71,8 +74,7 @@ if (nsisSource.includes('SetDetailsPrint none')) {
 } else if (!nsisSource.includes('SetDetailsPrint both')) {
   throw new Error('Could not enable file-level NSIS extraction details in the electron-builder template.');
 }
-console.log('Installer resources ready: bundled Python, yt-dlp, FFmpeg, Adobe CEP bridge, and Chromium browser extension.');
+console.log('Installer resources ready: bundled Python, yt-dlp, FFmpeg, Adobe CEP bridge, and signed Chromium browser extension.');
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });
-

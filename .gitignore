@@ -11,4 +11,7 @@ build/resources/bootstrap/python-wheels/*.whl
 build/resources/ffmpeg/ffmpeg.exe
 build/ytx.ico
 build/ytx-256.png
-
+build/resources/browser-extension/ytx-extension.crx
+build/resources/browser-extension/updates.xml
+build/resources/browser-extension/extension-id.txt
+build/keys/

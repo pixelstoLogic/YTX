@@ -1,15 +1,33 @@
 {
   "manifest_version": 3,
   "name": "YTX YouTube Trim Handoff",
-  "version": "1.1.9",
+  "version": "1.2.0",
   "description": "Open a YouTube video preview in YTX Studio to trim and export.",
   "permissions": [],
-  "icons": { "16": "icons/icon-16.png", "48": "icons/icon-48.png", "128": "icons/icon-128.png" },
-  "host_permissions": ["https://youtube.com/*", "https://www.youtube.com/*", "https://m.youtube.com/*", "https://youtu.be/*"],
-  "content_scripts": [{
-    "matches": ["https://youtube.com/*", "https://www.youtube.com/*", "https://m.youtube.com/*", "https://youtu.be/*"],
-    "js": ["content.js"],
-    "run_at": "document_idle"
-  }]
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "host_permissions": [
+    "https://youtube.com/*",
+    "https://www.youtube.com/*",
+    "https://m.youtube.com/*",
+    "https://youtu.be/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://youtube.com/*",
+        "https://www.youtube.com/*",
+        "https://m.youtube.com/*",
+        "https://youtu.be/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA5U+ek0dxQgC6E7EsqLxaR5SoeYD9+fwgyC0NGWQn8TgEIXi+CQZPfmDHgcu0NYi0VbFgsBdalVTZW2GCYRNM/Te59e35imGkMZIbGb6NkypgERQd9iuMjVfqDHpIkdKnsc8qigMX8OpBC2PcmEQGv75Ua44dEm4532riLgD8fWvYa0KDUhmaQkJg4JwR1zPQ2uVrDWYKvriTt/xL65LOOrpgArq6qCuhDnWgthwX90AHowERMbh3XlbOIroCPeEklfERXw6g/Jb5GEkwqrpZMj9boAfdV/K5Xhli0uhILzsegB94RWL0pu1VnycBWboreLVvK37p1tE4ng5Tzza/3QIDAQAB"
 }
-

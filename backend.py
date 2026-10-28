@@ -304,4 +304,3 @@ if __name__ == '__main__':
     elif len(sys.argv) > 1 and sys.argv[1] == 'download' and len(sys.argv) >= 3: download(sys.argv[2])
     elif len(sys.argv) > 1 and sys.argv[1] == 'export' and len(sys.argv) >= 7: export(*sys.argv[2:7])
     else: reply({'error': 'Invalid backend command.'}, 2)
-

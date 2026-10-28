@@ -8,8 +8,11 @@ const http = require('node:http');
 const crypto = require('node:crypto');
 const { pipeline } = require('node:stream/promises');
 const { Transform, Readable } = require('node:stream');
+const { createIntegrationManager } = require('./integrations');
 
 const GITHUB_REPOSITORY = 'pixelstoLogic/YTX';
+const GITHUB_API = `https://api.github.com/repos/${GITHUB_REPOSITORY}`;
+const GITHUB_RELEASES = `https://github.com/${GITHUB_REPOSITORY}/releases`;
 
 let backendProcess = null;
 let backendPort = null;
@@ -21,11 +24,24 @@ let pendingVideoUrl = '';
 let adobeBridgeServer = null;
 let adobeBridgePort = 0;
 let adobeBridgeToken = crypto.randomBytes(24).toString('hex');
+const adobeBridgeTokenCreatedAt = Date.now();
 const adobeHeartbeats = new Map();
 const adobeCommands = { premiere: [], aftereffects: [] };
 const adobeWaiters = new Map();
 const preferencesPath = () => path.join(app.getPath('userData'), 'preferences.json');
 const updateStatePath = () => path.join(app.getPath('userData'), 'update-state.json');
+let integrations = null;
+function integrationManager() {
+  if (!integrations) {
+    integrations = createIntegrationManager({
+      resourcesRoot: app.isPackaged ? process.resourcesPath : path.join(__dirname, 'build', 'resources'),
+      appData: app.getPath('appData'),
+      localAppData: process.env.LOCALAPPDATA || app.getPath('appData'),
+      appVersion: app.getVersion()
+    });
+  }
+  return integrations;
+}
 function readUpdateState() { try { return JSON.parse(fs.readFileSync(updateStatePath(), 'utf8')); } catch { return {}; } }
 function writeUpdateState(state) { fs.mkdirSync(path.dirname(updateStatePath()), { recursive: true }); fs.writeFileSync(updateStatePath(), JSON.stringify(state, null, 2), 'utf8'); }
 function loadPreferences() { try { return { openAtLogin: false, keepInTray: false, ...JSON.parse(fs.readFileSync(preferencesPath(), 'utf8')) }; } catch { return { openAtLogin: false, keepInTray: false }; } }
@@ -82,6 +98,7 @@ app.whenReady().then(() => {
   createTray();
   globalShortcut.register('Control+Alt+Y', () => { if (!mainWindow) createWindow(); else { mainWindow.show(); mainWindow.focus(); } });
   startAdobeBridge().catch(error => console.error('Adobe bridge server failed:', error));
+  ensureAdobeBridgeOnStartup().catch(error => console.error('Adobe bridge repair failed:', error.message));
   createWindow(process.argv.includes('--hidden'));
   ensureBackend().catch(error => console.error('Python bridge failed to start:', error.message));
   app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(false); });
@@ -160,7 +177,27 @@ ipcMain.handle('app:get-changelog', () => {
   catch { return '# YTX Studio\n\nChangelog is unavailable.'; }
 });
 ipcMain.handle('app:check-updates', async () => checkForUpdates());
-ipcMain.handle('app:download-update', async (_event, asset) => downloadReleaseAsset(asset));
+ipcMain.handle('app:list-releases', async () => listReleases());
+ipcMain.handle('app:download-update', async (_event, request) => downloadReleaseAsset(request));
+ipcMain.handle('app:download-release', async (_event, request) => downloadReleaseAsset(request));
+ipcMain.handle('integrations:detect', async () => ({ browsers: integrationManager().detectBrowsers(), adobe: integrationManager().detectAdobeHosts() }));
+ipcMain.handle('integrations:status', async () => ({ browsers: integrationManager().getBrowserExtensionStatus(), adobe: integrationManager().getAdobeBridgeStatus() }));
+ipcMain.handle('integrations:install-browser-extension', async (_event, request) => integrationManager().installBrowserExtension(request || {}));
+ipcMain.handle('integrations:remove-browser-extension', async () => integrationManager().removeBrowserExtension());
+ipcMain.handle('integrations:repair-adobe', async (_event, request) => {
+  const manager = integrationManager();
+  const result = manager.installAdobeBridge(request || {});
+  if (adobeBridgePort && adobeBridgeToken) manager.writeBridgeConfig(adobeBridgePort, adobeBridgeToken);
+  return result;
+});
+ipcMain.handle('integrations:diagnostics', async () => {
+  const manager = integrationManager();
+  return {
+    version: app.getVersion(),
+    adobeBridge: { port: adobeBridgePort, running: Boolean(adobeBridgeServer), status: { premiere: bridgeAppStatus('premiere'), aftereffects: bridgeAppStatus('aftereffects') }, ...manager.getAdobeBridgeStatus() },
+    browsers: manager.getBrowserExtensionStatus()
+  };
+});
 ipcMain.handle('app:open-installer', async (_event, filePath) => {
   if (!filePath || !fs.existsSync(filePath)) return { error: 'Installer file not found.' };
   return { error: await shell.openPath(filePath) };
@@ -206,17 +243,17 @@ ipcMain.handle('app:system-status', async () => {
 function scanSystem() {
   const env = process.env;
   const roots = [env.ProgramFiles, env['ProgramFiles(x86)'], env.LOCALAPPDATA, env.APPDATA].filter(Boolean);
-  const candidates = [
-    { name: 'Adobe Premiere Pro', paths: roots.flatMap(root => [path.join(root, 'Adobe', 'Adobe Premiere Pro 2026', 'Adobe Premiere Pro.exe'), path.join(root, 'Adobe', 'Adobe Premiere Pro 2025', 'Adobe Premiere Pro.exe'), path.join(root, 'Adobe', 'Adobe Premiere Pro 2024', 'Adobe Premiere Pro.exe')]) },
-    { name: 'Adobe After Effects', paths: roots.flatMap(root => [path.join(root, 'Adobe', 'Adobe After Effects 2026', 'Support Files', 'AfterFX.exe'), path.join(root, 'Adobe', 'Adobe After Effects 2025', 'Support Files', 'AfterFX.exe'), path.join(root, 'Adobe', 'Adobe After Effects 2024', 'Support Files', 'AfterFX.exe')]) },
-    { name: 'Google Chrome', paths: roots.flatMap(root => [path.join(root, 'Google', 'Chrome', 'Application', 'chrome.exe'), path.join(root, 'Google', 'Chrome SxS', 'Application', 'chrome.exe')]) },
-    { name: 'Microsoft Edge', paths: roots.map(root => path.join(root, 'Microsoft', 'Edge', 'Application', 'msedge.exe')) },
-    { name: 'Mozilla Firefox', paths: roots.map(root => path.join(root, 'Mozilla Firefox', 'firefox.exe')) },
-    { name: 'Brave', paths: roots.map(root => path.join(root, 'BraveSoftware', 'Brave-Browser', 'Application', 'brave.exe')) },
+  const manager = integrationManager();
+  const adobe = manager.detectAdobeHosts();
+  const browsers = manager.detectBrowsers();
+  const firefox = roots.map(root => path.join(root, 'Mozilla Firefox', 'firefox.exe')).find(fs.existsSync) || '';
+  const apps = [
+    ...adobe.hosts.map(host => ({ name: host.name, installed: host.path, kind: 'adobe' })),
+    ...browsers.map(browser => ({ name: browser.name, installed: browser.path, kind: 'browser', automatic: browser.automatic })),
+    { name: 'Mozilla Firefox', installed: firefox, kind: 'browser', automatic: false }
   ];
-  const apps = candidates.map(item => ({ name: item.name, installed: item.paths.find(fs.existsSync) || '' }));
   const totalMemory = os.totalmem();
-  return { apps, cpu: os.cpus()[0]?.model || 'Unknown CPU', cores: os.cpus().length, memoryGb: +(totalMemory / 1073741824).toFixed(1), freeMemoryGb: +(os.freemem() / 1073741824).toFixed(1), arch: os.arch(), platform: os.platform(), sequentialConversion: true };
+  return { apps, adobe, browsers, cpu: os.cpus()[0]?.model || 'Unknown CPU', cores: os.cpus().length, memoryGb: +(totalMemory / 1073741824).toFixed(1), freeMemoryGb: +(os.freemem() / 1073741824).toFixed(1), arch: os.arch(), platform: os.platform(), sequentialConversion: true };
 }
 
 function sendTaskProgress(task) {
@@ -224,53 +261,188 @@ function sendTaskProgress(task) {
 }
 
 function versionParts(value) { return String(value || '').replace(/^v/i, '').split(/[.+-]/).map(part => Number(part) || 0); }
-function isNewerVersion(candidate, current) {
-  const a = versionParts(candidate), b = versionParts(current);
-  for (let i = 0; i < Math.max(a.length, b.length); i++) { if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0); }
-  return false;
+function compareVersions(a, b) {
+  const left = versionParts(a), right = versionParts(b);
+  for (let i = 0; i < Math.max(left.length, right.length); i++) {
+    if ((left[i] || 0) !== (right[i] || 0)) return (left[i] || 0) > (right[i] || 0) ? 1 : -1;
+  }
+  return 0;
+}
+function isNewerVersion(candidate, current) { return compareVersions(candidate, current) > 0; }
+
+let releaseCache = { at: 0, releases: [] };
+function normalizeRelease(release) {
+  return {
+    version: String(release.tag_name || '').replace(/^v/i, ''),
+    tag: release.tag_name || '',
+    name: release.name || release.tag_name || 'YTX release',
+    notes: release.body || 'No release notes were published.',
+    url: release.html_url || GITHUB_RELEASES,
+    publishedAt: release.published_at || '',
+    draft: Boolean(release.draft),
+    prerelease: Boolean(release.prerelease),
+    assets: (release.assets || []).map(item => ({
+      name: item.name,
+      size: Number(item.size) || 0,
+      url: item.browser_download_url,
+      digest: item.digest || ''
+    }))
+  };
+}
+async function fetchPublicReleases(force = false) {
+  if (!force && releaseCache.releases.length && Date.now() - releaseCache.at < 120000) return releaseCache.releases;
+  const response = await fetch(`${GITHUB_API}/releases?per_page=50`, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'YTX-Studio-Updater' } });
+  if (response.status === 404) return [];
+  if (response.status === 403) throw new Error('GitHub API rate limit reached. Try again later.');
+  if (!response.ok) throw new Error(`GitHub release check failed (${response.status}).`);
+  const payload = await response.json();
+  if (!Array.isArray(payload)) throw new Error('GitHub returned an unexpected release list.');
+  const releases = payload
+    .map(normalizeRelease)
+    .filter(release => !release.draft && !release.prerelease && /^\d+(\.\d+){1,3}$/.test(release.version))
+    .sort((a, b) => compareVersions(b.version, a.version));
+  releaseCache = { at: Date.now(), releases };
+  return releases;
+}
+function findInstallerAsset(release, version = release.version) {
+  // The asset name must exactly match the tag version. A release whose asset
+  // name points at a different version must never be offered as an update.
+  const exactName = `YTX-Setup-${version}.exe`.toLowerCase();
+  return release.assets.find(item => item.name.toLowerCase() === exactName) || null;
+}
+function releaseSummary(release, currentVersion) {
+  const asset = findInstallerAsset(release);
+  return {
+    version: release.version,
+    tag: release.tag,
+    name: release.name,
+    notes: release.notes,
+    url: release.url,
+    publishedAt: release.publishedAt,
+    available: isNewerVersion(release.version, currentVersion),
+    current: compareVersions(release.version, currentVersion) === 0,
+    asset: asset ? { name: asset.name, size: asset.size, url: asset.url, digest: asset.digest } : null
+  };
+}
+async function listReleases() {
+  try {
+    const releases = await fetchPublicReleases();
+    return {
+      ok: true,
+      currentVersion: app.getVersion(),
+      latestVersion: releases[0]?.version || '',
+      releases: releases.slice(0, 25).map(release => releaseSummary(release, app.getVersion()))
+    };
+  } catch (error) { return { error: `Could not reach GitHub: ${error.message}` }; }
 }
 async function checkForUpdates() {
   try {
-    const response = await fetch(`https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/latest`, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'YTX-Studio-Updater' } });
-    if (response.status === 404) return { ok: true, currentVersion: app.getVersion(), available: false, message: 'No GitHub release is published yet.' };
-    if (!response.ok) return { error: `GitHub update check failed (${response.status}).` };
-    const release = await response.json();
-    const asset = (release.assets || []).find(item => /^YTX-Setup-.*\.exe$/i.test(item.name));
-    const state = readUpdateState(), latestVersion = release.tag_name || '';
-    const installed = state.installed && state.installed.version === latestVersion ? state.installed : null;
-    return { ok: true, currentVersion: app.getVersion(), latestVersion, updated: Boolean(installed), message: installed ? `Successfully installed on ${new Date(state.installedAt || Date.now()).toLocaleString()}.` : '', available: !installed && isNewerVersion(latestVersion, app.getVersion()), name: release.name || latestVersion || 'YTX update', notes: release.body || 'No release notes provided.', url: release.html_url || `https://github.com/${GITHUB_REPOSITORY}/releases`, asset: asset ? { name: asset.name, size: asset.size, url: asset.browser_download_url, digest: asset.digest || '' } : null, publishedAt: release.published_at || '' };
+    const releases = await fetchPublicReleases();
+    if (!releases.length) return { ok: true, currentVersion: app.getVersion(), available: false, releases: [], message: 'No GitHub release is published yet.' };
+    const latest = releases[0];
+    const state = readUpdateState();
+    const installed = state.installed && compareVersions(state.installed.version, latest.version) === 0 ? state.installed : null;
+    const summary = releaseSummary(latest, app.getVersion());
+    return {
+      ok: true,
+      currentVersion: app.getVersion(),
+      latestVersion: latest.version,
+      latestTag: latest.tag,
+      updated: Boolean(installed),
+      message: installed ? `Successfully installed on ${new Date(state.installedAt || Date.now()).toLocaleString()}.` : '',
+      available: summary.available,
+      name: latest.name,
+      notes: latest.notes,
+      url: latest.url,
+      asset: summary.asset,
+      publishedAt: latest.publishedAt,
+      releases: releases.slice(0, 25).map(release => releaseSummary(release, app.getVersion()))
+    };
   } catch (error) { return { error: `Could not reach GitHub: ${error.message}` }; }
 }
-async function downloadReleaseAsset(asset) {
-  const expectedPrefix = `https://github.com/${GITHUB_REPOSITORY}/releases/download/`;
-  if (!asset || !asset.url || !asset.url.startsWith(expectedPrefix) || !/^YTX-Setup-.*\.exe$/i.test(asset.name || '')) return { error: 'The release installer URL is invalid.' };
-  const id = `update-${Date.now()}`, filePath = path.join(app.getPath('downloads'), path.basename(asset.name));
+function uniqueDownloadPath(folder, fileName) {
+  const parsed = path.parse(fileName);
+  let candidate = path.join(folder, fileName);
+  for (let index = 1; fs.existsSync(candidate); index++) candidate = path.join(folder, `${parsed.name} (${index})${parsed.ext}`);
+  return candidate;
+}
+async function downloadReleaseAsset(request = {}) {
+  const requestedVersion = String(request.version || request.latestVersion || '').replace(/^v/i, '');
+  let id = `update-${Date.now()}`;
   try {
+    const releases = await fetchPublicReleases(true);
+    if (!releases.length) return { error: 'No YTX release is published on GitHub yet.' };
+    const release = requestedVersion
+      ? releases.find(item => compareVersions(item.version, requestedVersion) === 0)
+      : releases[0];
+    if (!release) return { error: `YTX ${requestedVersion} was not found among the published releases.` };
+    const asset = findInstallerAsset(release, release.version);
+    if (!asset) return { error: `YTX ${release.version} does not include a Windows installer asset.` };
+    const expectedPrefix = `https://github.com/${GITHUB_REPOSITORY}/releases/download/`;
+    if (!asset.url || !asset.url.startsWith(expectedPrefix) || !/^YTX-Setup-.*\.exe$/i.test(asset.name)) return { error: 'The release installer URL is invalid.' };
+
+    const filePath = uniqueDownloadPath(app.getPath('downloads'), path.basename(asset.name));
+    id = `update-${release.version}-${Date.now()}`;
     const response = await fetch(asset.url, { headers: { 'User-Agent': 'YTX-Studio-Updater' }, redirect: 'follow' });
     if (!response.ok || !response.body) return { error: `Installer download failed (${response.status}).` };
+    const finalUrl = new URL(response.url);
+    if (!/(^|\.)github\.com$|(^|\.)githubusercontent\.com$/i.test(finalUrl.hostname)) return { error: 'The installer download was redirected to an unexpected host.' };
     const total = Number(response.headers.get('content-length')) || Number(asset.size) || 0;
     let downloaded = 0;
     const hash = crypto.createHash('sha256');
-    const tracker = new Transform({ transform(chunk, _encoding, callback) { downloaded += chunk.length; hash.update(chunk); sendTaskProgress({ id, type: 'update', progress: total ? Math.floor(downloaded / total * 100) : 0, downloaded, total, message: `Downloading ${asset.name}`, done: false }); callback(null, chunk); } });
+    const tracker = new Transform({ transform(chunk, _encoding, callback) { downloaded += chunk.length; hash.update(chunk); sendTaskProgress({ id, type: 'update', progress: total ? Math.floor(downloaded / total * 100) : 0, downloaded, total, message: `Downloading YTX ${release.version}`, done: false }); callback(null, chunk); } });
     await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
     await pipeline(Readable.fromWeb(response.body), tracker, fs.createWriteStream(filePath));
-    if (asset.digest && asset.digest.startsWith('sha256:') && hash.digest('hex').toLowerCase() !== asset.digest.slice(7).toLowerCase()) { await fs.promises.rm(filePath, { force: true }); return { error: 'The installer checksum did not match GitHub release metadata; the file was removed.' }; }
-    sendTaskProgress({ id, type: 'update', progress: 100, downloaded, total: total || downloaded, message: `Downloaded ${asset.name}`, done: true, path: filePath });
-    if (process.platform !== 'win32') return { path: filePath, installing: false };
-    const version = String(asset.latestVersion || '').replace(/^v/i, '');
-    if (!version) return { path: filePath, installing: false };
-    writeUpdateState({ ...readUpdateState(), pending: { version, notes: asset.notes || '', name: asset.name } });
+    const actualDigest = hash.digest('hex').toLowerCase();
+    let digestVerified = false;
+    if (asset.digest && asset.digest.startsWith('sha256:')) {
+      digestVerified = actualDigest === asset.digest.slice(7).toLowerCase();
+      if (!digestVerified) { await fs.promises.rm(filePath, { force: true }); return { error: 'The installer checksum did not match GitHub release metadata; the file was removed.' }; }
+    } else {
+      const sumsAsset = release.assets.find(item => /^SHA256SUMS(\.txt)?$/i.test(item.name));
+      if (sumsAsset) {
+        try {
+          const sums = await (await fetch(sumsAsset.url, { headers: { 'User-Agent': 'YTX-Studio-Updater' }, redirect: 'follow' })).text();
+          const line = sums.split(/\r?\n/).find(row => row.toLowerCase().includes(path.basename(asset.name).toLowerCase()));
+          if (line) {
+            digestVerified = line.trim().split(/\s+/)[0].toLowerCase() === actualDigest;
+            if (!digestVerified) { await fs.promises.rm(filePath, { force: true }); return { error: 'The installer checksum did not match SHA256SUMS.txt; the file was removed.' }; }
+          }
+        } catch {}
+      }
+    }
+    sendTaskProgress({ id, type: 'update', progress: 100, downloaded, total: total || downloaded, message: `Downloaded YTX ${release.version}`, done: true, path: filePath });
+
+    const install = process.platform === 'win32' && request.install !== false;
+    if (!install) return { ok: true, version: release.version, path: filePath, installing: false, digestVerified, releaseUrl: release.url };
+    writeUpdateState({ ...readUpdateState(), pending: { version: release.version, notes: release.notes || '', name: asset.name } });
     const installer = spawn(filePath, [], { detached: true, stdio: 'ignore', windowsHide: false });
     installer.once('error', error => { const state = readUpdateState(); delete state.pending; writeUpdateState(state); console.error('Unable to launch YTX installer:', error); });
     installer.unref();
-    setTimeout(() => app.quit(), 500);
-    return { path: filePath, installing: true };
-  } catch (error) { sendTaskProgress({ id, type: 'update', progress: 0, message: `Could not download ${asset.name}`, done: true, error: error.message }); return { error: error.message }; }
+    sendTaskProgress({ id, type: 'update', progress: 100, message: `Starting the YTX ${release.version} installer…`, done: true, path: filePath });
+    setTimeout(() => app.quit(), 700);
+    return { ok: true, version: release.version, path: filePath, installing: true, digestVerified, releaseUrl: release.url };
+  } catch (error) {
+    sendTaskProgress({ id, type: 'update', progress: 0, message: 'Could not download the YTX installer', done: true, error: error.message });
+    return { error: error.message };
+  }
+}
+
+async function ensureAdobeBridgeOnStartup() {
+  const manager = integrationManager();
+  const detected = manager.detectAdobeHosts();
+  const status = manager.getAdobeBridgeStatus();
+  if (!status.installed && !status.hosts.length) return;
+  const hosts = status.hosts.length
+    ? status.hosts
+    : (detected.hosts.length ? [...new Set(detected.hosts.map(host => host.id))] : ['premiere', 'aftereffects']);
+  manager.installAdobeBridge({ hosts });
+  if (adobeBridgePort && adobeBridgeToken) manager.writeBridgeConfig(adobeBridgePort, adobeBridgeToken);
 }
 
 function bridgeAppStatus(target) {
   const heartbeat = adobeHeartbeats.get(target);
-  return { connected: Boolean(heartbeat && Date.now() - heartbeat.at < 4500), app: heartbeat ? heartbeat.host : '', project: heartbeat ? heartbeat.project : '', projectPath: heartbeat ? heartbeat.projectPath : '', lastSeen: heartbeat ? heartbeat.at : 0 };
+  return { connected: Boolean(heartbeat && Date.now() - heartbeat.at < 8000), app: heartbeat ? heartbeat.host : '', project: heartbeat ? heartbeat.project : '', projectPath: heartbeat ? heartbeat.projectPath : '', lastSeen: heartbeat ? heartbeat.at : 0, capabilities: heartbeat ? heartbeat.capabilities : [] };
 }
 
 function isProcessRunning(imageName) {
@@ -294,54 +466,82 @@ function startAdobeBridge() {
   const server = http.createServer(async (req, res) => {
     if (req.method === 'OPTIONS') return sendJson(res, {});
     const parsed = new URL(req.url, 'http://127.0.0.1');
-    if (parsed.pathname === '/bridge/health') return sendJson(res, { ok: true });
+    if (parsed.pathname === '/bridge/health') return sendJson(res, { ok: true, app: 'YTX', version: app.getVersion(), bridge: 2 });
     if (req.headers['x-ytx-token'] !== adobeBridgeToken) return sendJson(res, { error: 'Unauthorized YTX bridge request.' }, 401);
-      if (req.method === 'GET' && parsed.pathname === '/bridge/status') return sendJson(res, { premiere: bridgeAppStatus('premiere'), aftereffects: bridgeAppStatus('aftereffects') });
-      if (req.method === 'GET' && parsed.pathname === '/bridge/project-media') {
-        const target = parsed.searchParams.get('app');
-        const status = bridgeAppStatus(target);
-        return sendJson(res, status.connected ? listProjectMedia(status.projectPath) : { error: 'Open the YTX Bridge panel in a saved Adobe project first.' });
-      }
+    if (req.method === 'GET' && parsed.pathname === '/bridge/status') {
+      return sendJson(res, {
+        premiere: { ...bridgeAppStatus('premiere'), queued: adobeCommands.premiere.length },
+        aftereffects: { ...bridgeAppStatus('aftereffects'), queued: adobeCommands.aftereffects.length },
+        version: app.getVersion()
+      });
+    }
+    if (req.method === 'GET' && parsed.pathname === '/bridge/diagnose') {
+      return sendJson(res, {
+        ok: true,
+        version: app.getVersion(),
+        bridge: 2,
+        tokenAge: Date.now() - adobeBridgeTokenCreatedAt,
+        hosts: { premiere: bridgeAppStatus('premiere'), aftereffects: bridgeAppStatus('aftereffects') },
+        queued: { premiere: adobeCommands.premiere.length, aftereffects: adobeCommands.aftereffects.length },
+        waiting: adobeWaiters.size
+      });
+    }
+    if (req.method === 'GET' && parsed.pathname === '/bridge/project-media') {
+      const target = parsed.searchParams.get('app');
+      const status = bridgeAppStatus(target);
+      return sendJson(res, status.connected ? listProjectMedia(status.projectPath) : { error: 'Open the YTX Bridge panel in a saved Adobe project first.' });
+    }
     if (req.method === 'GET' && parsed.pathname === '/bridge/next') {
       const target = parsed.searchParams.get('app');
       if (!adobeCommands[target]) return sendJson(res, { error: 'Unsupported Adobe host.' }, 400);
       return sendJson(res, adobeCommands[target].shift() || {});
     }
-    let raw = '';
-    req.on('data', chunk => { raw += chunk; if (raw.length > 200000) req.destroy(); });
-    req.on('end', () => {
-      let body;
-      try { body = JSON.parse(raw || '{}'); } catch { return sendJson(res, { error: 'Invalid JSON.' }, 400); }
-      const target = body.app;
-      if (!['premiere', 'aftereffects'].includes(target)) return sendJson(res, { error: 'Unknown Adobe host.' }, 400);
-      if (req.method === 'POST' && parsed.pathname === '/bridge/heartbeat') {
-        adobeHeartbeats.set(target, { at: Date.now(), host: String(body.host || target), project: String(body.project || ''), projectPath: String(body.projectPath || '') });
-        return sendJson(res, { connected: true });
-      }
-      if (req.method === 'POST' && parsed.pathname === '/bridge/complete') {
-        const waiter = adobeWaiters.get(body.id);
-        if (waiter) { clearTimeout(waiter.timer); adobeWaiters.delete(body.id); waiter.resolve(body); }
-        return sendJson(res, { ok: true });
-      }
-      if (req.method === 'POST' && parsed.pathname === '/bridge/handoff') {
-        const filePath = path.resolve(String(body.path || ''));
-        if (!fs.existsSync(filePath)) return sendJson(res, { error: 'The selected Adobe media file could not be found.' }, 404);
-        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('adobe:handoff', { path: filePath, url: pathToFileURL(filePath).href, source: target });
-        return sendJson(res, { ok: true });
-      }
-      return sendJson(res, { error: 'Not found.' }, 404);
-    });
+    if (req.method === 'POST') {
+      let raw = '';
+      let tooLarge = false;
+      req.on('data', chunk => { raw += chunk; if (raw.length > 200000) { tooLarge = true; req.destroy(); } });
+      req.on('end', () => {
+        if (tooLarge) return;
+        let body;
+        try { body = JSON.parse(raw || '{}'); } catch { return sendJson(res, { error: 'Invalid JSON.' }, 400); }
+        const target = body.app;
+        if (!['premiere', 'aftereffects'].includes(target)) return sendJson(res, { error: 'Unknown Adobe host.' }, 400);
+        if (parsed.pathname === '/bridge/heartbeat') {
+          adobeHeartbeats.set(target, {
+            at: Date.now(),
+            host: String(body.host || target),
+            project: String(body.project || ''),
+            projectPath: String(body.projectPath || ''),
+            capabilities: Array.isArray(body.capabilities) ? body.capabilities.map(String).slice(0, 20) : [],
+            panelVersion: String(body.panelVersion || '')
+          });
+          return sendJson(res, { connected: true, serverVersion: app.getVersion(), queued: adobeCommands[target].length });
+        }
+        if (parsed.pathname === '/bridge/complete') {
+          const waiter = adobeWaiters.get(body.id);
+          if (waiter) { clearTimeout(waiter.timer); adobeWaiters.delete(body.id); waiter.resolve(body); }
+          return sendJson(res, { ok: true });
+        }
+        if (parsed.pathname === '/bridge/handoff') {
+          const filePath = path.resolve(String(body.path || ''));
+          if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return sendJson(res, { error: 'The selected Adobe media file could not be found.' }, 404);
+          if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('adobe:handoff', { path: filePath, url: pathToFileURL(filePath).href, source: target });
+          return sendJson(res, { ok: true });
+        }
+        return sendJson(res, { error: 'Not found.' }, 404);
+      });
+      return;
+    }
+    return sendJson(res, { error: 'Not found.' }, 404);
   });
   adobeBridgeServer = server;
   return new Promise((resolve, reject) => {
-    server.once('error', reject);
+    server.once('error', error => { adobeBridgeServer = null; reject(error); });
     server.listen(0, '127.0.0.1', () => {
       adobeBridgePort = server.address().port;
-      // Keep settings beside the installed CEP panel so every Adobe host can
-      // read the same live port/token without depending on CEP's host-specific userData path.
-      const configDir = path.join(app.getPath('appData'), 'Adobe', 'CEP', 'extensions', 'YTX-Bridge');
-      fs.mkdirSync(configDir, { recursive: true });
-      fs.writeFileSync(path.join(configDir, 'bridge.json'), JSON.stringify({ port: adobeBridgePort, token: adobeBridgeToken }), 'utf8');
+      // Keep settings beside the installed CEP panel and in per-user YTX folders
+      // so every Adobe host can find the live port/token.
+      integrationManager().writeBridgeConfig(adobeBridgePort, adobeBridgeToken);
       resolve();
     });
   });
@@ -350,32 +550,54 @@ function startAdobeBridge() {
 async function queueAdobeImport(target, mediaPath) {
   if (!['premiere', 'aftereffects'].includes(target)) return { error: 'Choose Premiere Pro or After Effects.' };
   const source = path.resolve(mediaPath || '');
-  if (!fs.existsSync(source)) return { error: 'The exported media file could not be found.' };
-  if (!bridgeAppStatus(target).connected) return { error: target === 'premiere' ? 'Premiere bridge is offline. Restart Premiere and open Window → Extensions (Legacy) → YTX Bridge.' : 'After Effects bridge is offline. Restart After Effects and open Window → Extensions (Legacy) → YTX Bridge.' };
+  if (!fs.existsSync(source) || !fs.statSync(source).isFile()) return { error: 'The exported media file could not be found.' };
   const status = bridgeAppStatus(target);
+  if (!status.connected) return { error: target === 'premiere' ? 'Premiere bridge is offline. Restart Premiere and open Window → Extensions (Legacy) → YTX Bridge.' : 'After Effects bridge is offline. Restart After Effects and open Window → Extensions (Legacy) → YTX Bridge.' };
   const projectPath = String(status.projectPath || '');
   if (!projectPath || !fs.existsSync(projectPath) || !fs.statSync(projectPath).isDirectory()) return { error: 'Save the Adobe project before importing. YTX stores managed media inside the project folder.' };
-  let managed;
-  try { managed = copyProjectAsset(source, projectPath, target); }
-  catch (error) { return { error: `Could not place media in the project folder: ${error.message}` }; }
   const id = crypto.randomUUID();
-  const request = { id, path: managed.path, operation: 'import-to-timeline' };
+  let managed;
+  try { managed = copyProjectAsset(source, projectPath, target, id); }
+  catch (error) { return { error: `Could not place media in the project folder: ${error.message}` }; }
+  const request = { id, path: managed.path, sourcePath: source, operation: 'import-to-timeline', requestedAt: Date.now(), attempts: 0 };
   adobeCommands[target].push(request);
-  sendTaskProgress({ id, type: 'import', target, progress: 12, message: 'Waiting for the active Adobe timeline…' });
+  sendTaskProgress({ id, type: 'import', target, progress: 12, message: `Waiting for ${target === 'premiere' ? 'Premiere' : 'After Effects'} to accept the clip…` });
+
+  let lastSeen = status.lastSeen;
+  const keepAlive = setInterval(() => {
+    const current = bridgeAppStatus(target);
+    if (!current.connected) {
+      sendTaskProgress({ id, type: 'import', target, progress: 18, message: 'Waiting for the Adobe bridge panel to reconnect…', done: false });
+      return;
+    }
+    if (current.lastSeen !== lastSeen) {
+      lastSeen = current.lastSeen;
+      sendTaskProgress({ id, type: 'import', target, progress: 42, message: 'Adobe is importing the managed clip…', done: false });
+    }
+  }, 2500);
+
   const response = await new Promise(resolve => {
-    const timer = setTimeout(() => { adobeWaiters.delete(id); resolve({ ok: false, message: 'Adobe did not respond to the import request. Keep YTX Bridge panel open and retry.' }); }, 30000);
+    const timer = setTimeout(() => {
+      adobeWaiters.delete(id);
+      const index = adobeCommands[target].indexOf(request);
+      if (index >= 0) adobeCommands[target].splice(index, 1);
+      resolve({ ok: false, message: 'Adobe did not respond to the import request. Keep YTX Bridge panel open and retry.' });
+    }, 45000);
     adobeWaiters.set(id, { resolve, timer });
   });
+  clearInterval(keepAlive);
   sendTaskProgress({ id, type: 'import', target, progress: 100, message: response.message || (response.ok ? 'Imported into timeline.' : 'Import failed.'), done: true, error: response.ok ? '' : response.message });
   return response.ok ? { ok: true, message: response.message, path: managed.path } : { error: response.message };
 }
 
-function copyProjectAsset(source, projectDir, target) {
+function copyProjectAsset(source, projectDir, target, requestId = crypto.randomUUID()) {
   const folder = path.join(projectDir, 'YTX Media');
   fs.mkdirSync(folder, { recursive: true });
-  const base = path.basename(source);
-  let destination = path.join(folder, base);
-  if (fs.existsSync(destination)) destination = path.join(folder, `${path.parse(base).name}-${Date.now()}${path.extname(base)}`);
+  const rawBase = path.basename(source).replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').trim() || 'media';
+  const extension = path.extname(rawBase);
+  const stem = path.basename(rawBase, extension) || 'media';
+  let destination = path.join(folder, rawBase);
+  if (fs.existsSync(destination)) destination = path.join(folder, `${stem}-${requestId.slice(0, 8)}${extension}`);
   fs.copyFileSync(source, destination);
   const metadataPath = path.join(folder, '.ytx-media.json');
   let metadata = { version: 1, host: target, assets: [] };
@@ -491,4 +713,3 @@ function findFfmpeg() {
   if (process.env.CLIPFORGE_FFMPEG) return process.env.CLIPFORGE_FFMPEG;
   try { return require('ffmpeg-static'); } catch { return null; }
 }
-

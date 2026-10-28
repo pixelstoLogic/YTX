@@ -1,5 +1,6 @@
-!define MUI_WELCOMEPAGE_TITLE "Install YTX Studio"
+﻿!define MUI_WELCOMEPAGE_TITLE "Install YTX Studio"
 !define MUI_WELCOMEPAGE_TEXT "Preview online video, trim a selected range, then export video or audio.$\r$\n$\r$\nCopyright © 2026 ARYAN ARYA."
+!define YTX_EXTENSION_UPDATE_URL "https://github.com/pixelstoLogic/YTX/releases/latest/download/updates.xml"
 
 !include nsDialogs.nsh
 
@@ -256,6 +257,62 @@ Function YTXIntegrationsPageLeave
 FunctionEnd
 !endif
 
+!ifndef BUILD_UNINSTALLER
+Function YTXRegisterBrowserExtension
+  Exch $R0
+  Push $R1
+  Push $R2
+  Push $R8
+  Push $R9
+  StrCmp $R3 "" ytx_policy_done
+  StrCpy $R1 1
+  ytx_policy_loop:
+  ReadRegStr $R2 HKCU "$R0\ExtensionInstallForcelist" "$R1"
+  StrCmp $R2 "" ytx_policy_write
+  StrCmp $R2 "$R3;${YTX_EXTENSION_UPDATE_URL}" ytx_policy_done
+  IntOp $R1 $R1 + 1
+  StrCmp $R1 60 ytx_policy_done
+  Goto ytx_policy_loop
+  ytx_policy_write:
+  WriteRegStr HKCU "$R0\ExtensionInstallForcelist" "$R1" "$R3;${YTX_EXTENSION_UPDATE_URL}"
+  WriteRegStr HKCU "Software\YTX\BrowserExtension\Policies\$R8" "Key" "$R0"
+  WriteRegStr HKCU "Software\YTX\BrowserExtension\Policies\$R8" "ValueName" "$R1"
+  DetailPrint "Registered the YTX extension policy for $R8 (rule $R1)."
+  ytx_policy_done:
+  Pop $R9
+  Pop $R8
+  Pop $R2
+  Pop $R1
+  Pop $R0
+FunctionEnd
+!endif
+
+!ifdef BUILD_UNINSTALLER
+Function un.YTXRemoveBrowserExtensionPolicy
+  Exch $R0
+  Push $R1
+  Push $R2
+  Push $R8
+  StrCmp $R3 "" ytx_remove_policy_done
+  StrCpy $R1 1
+  ytx_remove_policy_loop:
+  ReadRegStr $R2 HKCU "$R0\ExtensionInstallForcelist" "$R1"
+  StrCmp $R2 "" ytx_remove_policy_next
+  StrCpy $R8 $R2 32
+  StrCmp $R8 $R3 0 ytx_remove_policy_next
+  DeleteRegValue HKCU "$R0\ExtensionInstallForcelist" "$R1"
+  ytx_remove_policy_next:
+  IntOp $R1 $R1 + 1
+  StrCmp $R1 60 ytx_remove_policy_done
+  Goto ytx_remove_policy_loop
+  ytx_remove_policy_done:
+  Pop $R8
+  Pop $R2
+  Pop $R1
+  Pop $R0
+FunctionEnd
+!endif
+
 !macro removeLegacyClipForge LEGACY_DIR
   StrCpy $R5 "${LEGACY_DIR}"
   IfFileExists "$R5\ClipForge Studio.exe" 0 +5
@@ -374,8 +431,12 @@ FunctionEnd
   CopyFiles /SILENT "$INSTDIR\resources\adobe-bridge\panel.js" "$APPDATA\Adobe\CEP\extensions\YTX-Bridge"
   CopyFiles /SILENT "$INSTDIR\resources\adobe-bridge\jsx\host.jsx" "$APPDATA\Adobe\CEP\extensions\YTX-Bridge\jsx"
   StrCmp $YTXEnableCepDebug ${BST_CHECKED} 0 ytx_cep_debug_done
+  WriteRegStr HKCU "Software\Adobe\CSXS.9" "PlayerDebugMode" "1"
+  WriteRegStr HKCU "Software\Adobe\CSXS.10" "PlayerDebugMode" "1"
+  WriteRegStr HKCU "Software\Adobe\CSXS.11" "PlayerDebugMode" "1"
   WriteRegStr HKCU "Software\Adobe\CSXS.12" "PlayerDebugMode" "1"
   WriteRegStr HKCU "Software\Adobe\CSXS.13" "PlayerDebugMode" "1"
+  WriteRegStr HKCU "Software\Adobe\CSXS.14" "PlayerDebugMode" "1"
   DetailPrint "Enabled Adobe CEP developer mode as an explicit installer selection."
   ytx_cep_debug_done:
   DetailPrint "YTX Bridge copied to the selected Adobe integration folder."
@@ -386,42 +447,59 @@ FunctionEnd
   StrCmp $YTXInstallOpera ${BST_CHECKED} copy_browser_extension
   StrCmp $YTXInstallVivaldi ${BST_CHECKED} copy_browser_extension skip_browser_extension
   copy_browser_extension:
-  DetailPrint "Copying the YTX browser helper selected on the integrations page..."
+  DetailPrint "Installing the signed YTX browser helper selected on the integrations page..."
   CreateDirectory "$LOCALAPPDATA\YTX\browser-extension"
   CreateDirectory "$LOCALAPPDATA\YTX\browser-extension\icons"
   CopyFiles /SILENT "$INSTDIR\resources\browser-extension\manifest.json" "$LOCALAPPDATA\YTX\browser-extension"
   CopyFiles /SILENT "$INSTDIR\resources\browser-extension\content.js" "$LOCALAPPDATA\YTX\browser-extension"
   CopyFiles /SILENT "$INSTDIR\resources\browser-extension\README.txt" "$LOCALAPPDATA\YTX\browser-extension"
+  CopyFiles /SILENT "$INSTDIR\resources\browser-extension\updates.xml" "$LOCALAPPDATA\YTX\browser-extension"
+  CopyFiles /SILENT "$INSTDIR\resources\browser-extension\extension-id.txt" "$LOCALAPPDATA\YTX\browser-extension"
+  CopyFiles /SILENT "$INSTDIR\resources\browser-extension\ytx-extension.crx" "$LOCALAPPDATA\YTX\browser-extension"
   CopyFiles /SILENT "$INSTDIR\resources\browser-extension\icons\icon-16.png" "$LOCALAPPDATA\YTX\browser-extension\icons"
   CopyFiles /SILENT "$INSTDIR\resources\browser-extension\icons\icon-48.png" "$LOCALAPPDATA\YTX\browser-extension\icons"
   CopyFiles /SILENT "$INSTDIR\resources\browser-extension\icons\icon-128.png" "$LOCALAPPDATA\YTX\browser-extension\icons"
-  ExecShell "open" "$LOCALAPPDATA\YTX\browser-extension"
-  StrCmp $YTXInstallChrome ${BST_CHECKED} open_chrome_extensions
-  Goto chrome_extensions_done
-  open_chrome_extensions:
-  ExecShell "open" "chrome://extensions"
-  chrome_extensions_done:
-  StrCmp $YTXInstallEdge ${BST_CHECKED} open_edge_extensions
-  Goto edge_extensions_done
-  open_edge_extensions:
-  ExecShell "open" "microsoft-edge://extensions"
-  edge_extensions_done:
-  StrCmp $YTXInstallBrave ${BST_CHECKED} open_brave_extensions
-  Goto brave_extensions_done
-  open_brave_extensions:
-  ExecShell "open" "brave://extensions"
-  brave_extensions_done:
-  StrCmp $YTXInstallOpera ${BST_CHECKED} open_opera_extensions
-  Goto opera_extensions_done
-  open_opera_extensions:
-  ExecShell "open" "opera://extensions"
-  opera_extensions_done:
-  StrCmp $YTXInstallVivaldi ${BST_CHECKED} open_vivaldi_extensions
-  Goto vivaldi_extensions_done
-  open_vivaldi_extensions:
-  ExecShell "open" "vivaldi://extensions"
-  vivaldi_extensions_done:
-  MessageBox MB_OK|MB_ICONINFORMATION "For each selected browser, turn on Developer mode and choose Load unpacked. Select the YTX browser-extension folder that just opened."
+  StrCpy $R3 ""
+  IfFileExists "$INSTDIR\resources\browser-extension\extension-id.txt" 0 ytx_extension_id_missing
+  FileOpen $R4 "$INSTDIR\resources\browser-extension\extension-id.txt" r
+  IfErrors ytx_extension_id_missing
+  FileRead $R4 $R3
+  FileClose $R4
+  StrCpy $R3 $R3 32
+  ytx_extension_id_missing:
+  StrCmp $R3 "" ytx_browser_policy_skipped
+  WriteRegStr HKCU "Software\YTX\BrowserExtension" "ExtensionId" "$R3"
+  WriteRegStr HKCU "Software\YTX\BrowserExtension" "UpdateUrl" "${YTX_EXTENSION_UPDATE_URL}"
+  StrCmp $YTXInstallChrome ${BST_CHECKED} 0 ytx_skip_chrome_policy
+  StrCpy $R8 "chrome"
+  Push "Software\Policies\Google\Chrome"
+  Call YTXRegisterBrowserExtension
+  ytx_skip_chrome_policy:
+  StrCmp $YTXInstallEdge ${BST_CHECKED} 0 ytx_skip_edge_policy
+  StrCpy $R8 "edge"
+  Push "Software\Policies\Microsoft\Edge"
+  Call YTXRegisterBrowserExtension
+  ytx_skip_edge_policy:
+  StrCmp $YTXInstallBrave ${BST_CHECKED} 0 ytx_skip_brave_policy
+  StrCpy $R8 "brave"
+  Push "Software\Policies\BraveSoftware\Brave"
+  Call YTXRegisterBrowserExtension
+  ytx_skip_brave_policy:
+  StrCmp $YTXInstallVivaldi ${BST_CHECKED} 0 ytx_skip_vivaldi_policy
+  StrCpy $R8 "vivaldi"
+  Push "Software\Policies\Vivaldi"
+  Call YTXRegisterBrowserExtension
+  ytx_skip_vivaldi_policy:
+  StrCmp $YTXInstallOpera ${BST_CHECKED} 0 ytx_skip_opera_policy
+  StrCpy $R8 "opera"
+  Push "Software\Policies\Opera Software\Opera"
+  Call YTXRegisterBrowserExtension
+  ytx_skip_opera_policy:
+  DetailPrint "Browser extension policy installed for the selected Chromium browser(s)."
+  MessageBox MB_OK|MB_ICONINFORMATION "YTX registered the signed browser helper for your selected browsers. Restart those browsers once and the YTX button will appear on YouTube—no Developer mode step. If your organization manages browser policies, the extension page can be used as a fallback."
+  Goto skip_browser_extension
+  ytx_browser_policy_skipped:
+  MessageBox MB_OK|MB_ICONINFORMATION "The signed browser helper could not be registered automatically. Open the YTX browser-extension folder and use Load unpacked after turning on Developer mode."
   skip_browser_extension:
   CreateDirectory "$LOCALAPPDATA\YTX"
   FileOpen $R4 "$LOCALAPPDATA\YTX\install-complete.flag" w
@@ -431,6 +509,25 @@ FunctionEnd
 !macroend
 
 !macro customUnInstall
+  ReadRegStr $R3 HKCU "Software\YTX\BrowserExtension" "ExtensionId"
+  IfFileExists "$INSTDIR\resources\browser-extension\extension-id.txt" 0 ytx_uninstall_extension_id_missing
+  FileOpen $R4 "$INSTDIR\resources\browser-extension\extension-id.txt" r
+  IfErrors ytx_uninstall_extension_id_missing
+  FileRead $R4 $R3
+  FileClose $R4
+  StrCpy $R3 $R3 32
+  ytx_uninstall_extension_id_missing:
+  Push "Software\Policies\Google\Chrome"
+  Call un.YTXRemoveBrowserExtensionPolicy
+  Push "Software\Policies\Microsoft\Edge"
+  Call un.YTXRemoveBrowserExtensionPolicy
+  Push "Software\Policies\BraveSoftware\Brave"
+  Call un.YTXRemoveBrowserExtensionPolicy
+  Push "Software\Policies\Vivaldi"
+  Call un.YTXRemoveBrowserExtensionPolicy
+  Push "Software\Policies\Opera Software\Opera"
+  Call un.YTXRemoveBrowserExtensionPolicy
+  DeleteRegKey HKCU "Software\YTX\BrowserExtension"
   RMDir /r "$APPDATA\Adobe\CEP\extensions\YTX-Bridge"
+  RMDir /r "$LOCALAPPDATA\YTX\browser-extension"
 !macroend
-

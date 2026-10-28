@@ -1,5 +1,17 @@
 # YTX Studio changelog
 
+## 1.2.0 — 2026-10-28
+
+- Added a tagged release pipeline that builds the installer, signs the browser extension into CRX3, publishes `updates.xml` and `SHA256SUMS.txt`, and only marks the highest version as GitHub's latest release.
+- Kept the CRX signing key out of the public repository: releases require the `YTX_EXTENSION_KEY` Actions secret and fail with an explicit message when it is missing, so the extension ID can never silently change.
+- Reworked the updater to read the published release list, install the highest stable version instead of trusting a renderer-supplied URL, verify SHA-256, and keep older installers downloadable for rollback.
+- Added version history to Downloads & Updates with installed/latest badges and explicit download actions.
+- Added automatic browser-extension installation through per-user Chromium extension policy, so Chrome, Edge, Brave, Vivaldi, and Opera no longer require Developer mode or Load unpacked.
+- Fixed browser detection handing the policy writer an empty key, which could report a successful install without writing any policy; YTX now verifies every policy write and explains when Windows blocks it.
+- Added an uninstall path that removes YTX browser policies and the local extension folder.
+- Strengthened the Adobe bridge with startup self-repair, CEP 9–14 developer-mode support, host-specific manifests, a reconnecting panel, command timeouts, managed project media, and new Premiere/After Effects import checks.
+- Added one-click browser-extension and Adobe bridge repair controls to the app.
+
 ## 1.1.9 — 2026-10-28
 
 - Replaced repeated setup questions with one detected-app selection page showing colored app badges, names, and checkboxes.
@@ -42,5 +54,4 @@
 - Added Downloads Center and GitHub release update support.
 
 Copyright © 2026 ARYAN ARYA.
-
 
