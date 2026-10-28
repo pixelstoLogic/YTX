@@ -1,8 +1,9 @@
-name: Build YTX release installer
+name: Build and publish YTX release
 
 on:
-  release:
-    types: [published, edited]
+  push:
+    branches:
+      - 'release/**'
 
 permissions:
   contents: write
@@ -13,22 +14,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: main
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - name: Install Node dependencies
         run: npm ci
-      - name: Prepare Windows installer resources
-        run: npm run prepare:installer
       - name: Build Windows installer
-        run: npx electron-builder --win nsis --x64 --publish never
-      - name: Attach installer to published release
+        run: npm run installer
+      - name: Create GitHub release and upload installer
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          gh release upload $env:RELEASE_TAG "dist/YTX-Setup-$version.exe" --clobber
+          $tag = "v$version"
+          gh release create $tag "dist/YTX-Setup-$version.exe" --target main --title "YTX Studio $version" --notes-file CHANGELOG.md
+
