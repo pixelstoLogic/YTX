@@ -55,10 +55,15 @@
   function readSettings() {
     try {
       if (!host || typeof host.getSystemPath !== 'function') throw new Error('Adobe CEP host APIs are unavailable. Restart Premiere Pro or After Effects and reopen YTX Bridge.');
+      if (!window.cep || !window.cep.fs || typeof window.cep.fs.readFile !== 'function') throw new Error('Adobe CEP file access is unavailable. Restart the Adobe host and reopen YTX Bridge.');
+      var candidates = [];
+      var extensionRoot = host.getSystemPath('extension');
+      if (extensionRoot) candidates.push(extensionRoot.replace(/\\/g, '/') + '/bridge.json');
       var root = host.getSystemPath('userData');
-      if (!root) throw new Error('Adobe could not resolve its user data folder. Restart the Adobe host and retry.');
-      root = root.replace(/\\/g, '/');
-      var candidates = [root + '/YTX/bridge.json', root + '/Adobe/YTX/bridge.json'];
+      if (root) {
+        root = root.replace(/\\/g, '/');
+        candidates.push(root + '/YTX/bridge.json', root + '/Adobe/YTX/bridge.json');
+      }
       var result = null;
       for (var i = 0; i < candidates.length; i++) {
         var candidate = window.cep.fs.readFile(candidates[i]);
