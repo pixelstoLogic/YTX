@@ -1,9 +1,260 @@
 !define MUI_WELCOMEPAGE_TITLE "Install YTX Studio"
 !define MUI_WELCOMEPAGE_TEXT "Preview online video, trim a selected range, then export video or audio.$\r$\n$\r$\nCopyright © 2026 ARYAN ARYA."
 
+!include nsDialogs.nsh
+
+!ifndef BUILD_UNINSTALLER
+Var YTXDialog
+Var YTXPremiereBox
+Var YTXAfterEffectsBox
+Var YTXChromeBox
+Var YTXEdgeBox
+Var YTXBraveBox
+Var YTXOperaBox
+Var YTXVivaldiBox
+Var YTXCepDebugBox
+Var YTXInstallPremiere
+Var YTXInstallAfterEffects
+Var YTXInstallChrome
+Var YTXInstallEdge
+Var YTXInstallBrave
+Var YTXInstallOpera
+Var YTXInstallVivaldi
+Var YTXEnableCepDebug
+Var YTXDetectedPremiere
+Var YTXDetectedAfterEffects
+Var YTXDetectedChrome
+Var YTXDetectedEdge
+Var YTXDetectedBrave
+Var YTXDetectedOpera
+Var YTXDetectedVivaldi
+Var YTXChoiceInitialized
+Var YTXBadge
+!endif
+
 !macro customWelcomePage
   !insertmacro MUI_PAGE_WELCOME
 !macroend
+
+!macro customPageAfterChangeDir
+  Page custom YTXIntegrationsPageCreate YTXIntegrationsPageLeave
+!macroend
+
+!ifndef BUILD_UNINSTALLER
+Function YTXIntegrationsPageCreate
+  nsDialogs::Create 1018
+  Pop $YTXDialog
+  ${If} $YTXDialog == error
+    Abort
+  ${EndIf}
+
+  ${NSD_CreateLabel} 0 0 100% 20u "Choose where YTX should connect"
+  Pop $YTXBadge
+  ${NSD_CreateLabel} 0 22u 100% 26u "Detected apps start selected. Uncheck anything you do not want; unavailable apps stay disabled."
+  Pop $YTXBadge
+
+  StrCpy $YTXDetectedPremiere 0
+  IfFileExists "$PROGRAMFILES64\Adobe\Adobe Premiere Pro 2026\Adobe Premiere Pro.exe" ytx_premiere_detected
+  IfFileExists "$PROGRAMFILES64\Adobe\Adobe Premiere Pro 2025\Adobe Premiere Pro.exe" ytx_premiere_detected
+  IfFileExists "$PROGRAMFILES64\Adobe\Adobe Premiere Pro 2024\Adobe Premiere Pro.exe" ytx_premiere_detected
+  Goto ytx_premiere_detection_done
+  ytx_premiere_detected:
+  StrCpy $YTXDetectedPremiere 1
+  ytx_premiere_detection_done:
+  StrCpy $YTXDetectedAfterEffects 0
+  IfFileExists "$PROGRAMFILES64\Adobe\Adobe After Effects 2026\Support Files\AfterFX.exe" ytx_aftereffects_detected
+  IfFileExists "$PROGRAMFILES64\Adobe\Adobe After Effects 2025\Support Files\AfterFX.exe" ytx_aftereffects_detected
+  IfFileExists "$PROGRAMFILES64\Adobe\Adobe After Effects 2024\Support Files\AfterFX.exe" ytx_aftereffects_detected
+  Goto ytx_aftereffects_detection_done
+  ytx_aftereffects_detected:
+  StrCpy $YTXDetectedAfterEffects 1
+  ytx_aftereffects_detection_done:
+
+  StrCpy $YTXDetectedChrome 0
+  IfFileExists "$LOCALAPPDATA\Google\Chrome\Application\chrome.exe" ytx_chrome_detected
+  IfFileExists "$PROGRAMFILES64\Google\Chrome\Application\chrome.exe" ytx_chrome_detected
+  IfFileExists "$PROGRAMFILES32\Google\Chrome\Application\chrome.exe" ytx_chrome_detected
+  Goto ytx_chrome_detection_done
+  ytx_chrome_detected:
+  StrCpy $YTXDetectedChrome 1
+  ytx_chrome_detection_done:
+  StrCpy $YTXDetectedEdge 0
+  IfFileExists "$LOCALAPPDATA\Microsoft\Edge\Application\msedge.exe" ytx_edge_detected
+  IfFileExists "$PROGRAMFILES64\Microsoft\Edge\Application\msedge.exe" ytx_edge_detected
+  IfFileExists "$PROGRAMFILES32\Microsoft\Edge\Application\msedge.exe" ytx_edge_detected
+  Goto ytx_edge_detection_done
+  ytx_edge_detected:
+  StrCpy $YTXDetectedEdge 1
+  ytx_edge_detection_done:
+  StrCpy $YTXDetectedBrave 0
+  IfFileExists "$LOCALAPPDATA\BraveSoftware\Brave-Browser\Application\brave.exe" ytx_brave_detected
+  IfFileExists "$PROGRAMFILES64\BraveSoftware\Brave-Browser\Application\brave.exe" ytx_brave_detected
+  IfFileExists "$PROGRAMFILES32\BraveSoftware\Brave-Browser\Application\brave.exe" ytx_brave_detected
+  Goto ytx_brave_detection_done
+  ytx_brave_detected:
+  StrCpy $YTXDetectedBrave 1
+  ytx_brave_detection_done:
+  StrCpy $YTXDetectedOpera 0
+  IfFileExists "$LOCALAPPDATA\Programs\Opera\launcher.exe" ytx_opera_detected
+  IfFileExists "$PROGRAMFILES64\Opera\launcher.exe" ytx_opera_detected
+  IfFileExists "$PROGRAMFILES32\Opera\launcher.exe" ytx_opera_detected
+  Goto ytx_opera_detection_done
+  ytx_opera_detected:
+  StrCpy $YTXDetectedOpera 1
+  ytx_opera_detection_done:
+  StrCpy $YTXDetectedVivaldi 0
+  IfFileExists "$LOCALAPPDATA\Vivaldi\Application\vivaldi.exe" ytx_vivaldi_detected
+  IfFileExists "$PROGRAMFILES64\Vivaldi\Application\vivaldi.exe" ytx_vivaldi_detected
+  IfFileExists "$PROGRAMFILES32\Vivaldi\Application\vivaldi.exe" ytx_vivaldi_detected
+  Goto ytx_vivaldi_detection_done
+  ytx_vivaldi_detected:
+  StrCpy $YTXDetectedVivaldi 1
+  ytx_vivaldi_detection_done:
+
+  ${If} $YTXChoiceInitialized != 1
+    StrCpy $YTXInstallPremiere ${BST_UNCHECKED}
+    StrCpy $YTXInstallAfterEffects ${BST_UNCHECKED}
+    StrCpy $YTXInstallChrome ${BST_UNCHECKED}
+    StrCpy $YTXInstallEdge ${BST_UNCHECKED}
+    StrCpy $YTXInstallBrave ${BST_UNCHECKED}
+    StrCpy $YTXInstallOpera ${BST_UNCHECKED}
+    StrCpy $YTXInstallVivaldi ${BST_UNCHECKED}
+    ${If} $YTXDetectedPremiere == 1
+      StrCpy $YTXInstallPremiere ${BST_CHECKED}
+    ${EndIf}
+    ${If} $YTXDetectedAfterEffects == 1
+      StrCpy $YTXInstallAfterEffects ${BST_CHECKED}
+    ${EndIf}
+    ${If} $YTXDetectedChrome == 1
+      StrCpy $YTXInstallChrome ${BST_CHECKED}
+    ${EndIf}
+    ${If} $YTXDetectedEdge == 1
+      StrCpy $YTXInstallEdge ${BST_CHECKED}
+    ${EndIf}
+    ${If} $YTXDetectedBrave == 1
+      StrCpy $YTXInstallBrave ${BST_CHECKED}
+    ${EndIf}
+    ${If} $YTXDetectedOpera == 1
+      StrCpy $YTXInstallOpera ${BST_CHECKED}
+    ${EndIf}
+    ${If} $YTXDetectedVivaldi == 1
+      StrCpy $YTXInstallVivaldi ${BST_CHECKED}
+    ${EndIf}
+    StrCpy $YTXEnableCepDebug ${BST_UNCHECKED}
+    ${If} $YTXDetectedPremiere == 1
+    ${OrIf} $YTXDetectedAfterEffects == 1
+      StrCpy $YTXEnableCepDebug ${BST_CHECKED}
+    ${EndIf}
+    StrCpy $YTXChoiceInitialized 1
+  ${EndIf}
+
+  ${NSD_CreateGroupBox} 0 53u 100% 92u "Adobe video apps"
+  Pop $YTXBadge
+  ${NSD_CreateLabel} 12u 68u 22u 22u "Pr"
+  Pop $YTXBadge
+  SetCtlColors $YTXBadge "FFFFFF" "7038B0"
+  ${NSD_CreateCheckBox} 42u 68u 85% 22u "Adobe Premiere Pro    ·    Detected"
+  Pop $YTXPremiereBox
+  ${If} $YTXDetectedPremiere != 1
+    ${NSD_SetText} $YTXPremiereBox "Adobe Premiere Pro    ·    Not detected"
+    EnableWindow $YTXPremiereBox 0
+  ${ElseIf} $YTXInstallPremiere == ${BST_CHECKED}
+    ${NSD_Check} $YTXPremiereBox
+  ${EndIf}
+  ${NSD_CreateLabel} 12u 96u 22u 22u "Ae"
+  Pop $YTXBadge
+  SetCtlColors $YTXBadge "FFFFFF" "5D35A8"
+  ${NSD_CreateCheckBox} 42u 96u 85% 22u "Adobe After Effects    ·    Detected"
+  Pop $YTXAfterEffectsBox
+  ${If} $YTXDetectedAfterEffects != 1
+    ${NSD_SetText} $YTXAfterEffectsBox "Adobe After Effects    ·    Not detected"
+    EnableWindow $YTXAfterEffectsBox 0
+  ${ElseIf} $YTXInstallAfterEffects == ${BST_CHECKED}
+    ${NSD_Check} $YTXAfterEffectsBox
+  ${EndIf}
+  ${NSD_CreateCheckBox} 12u 119u 94% 20u "Enable Adobe CEP developer mode for this Windows user (needed for unsigned YTX Bridge)"
+  Pop $YTXCepDebugBox
+  ${If} $YTXDetectedPremiere != 1
+  ${AndIf} $YTXDetectedAfterEffects != 1
+    EnableWindow $YTXCepDebugBox 0
+  ${ElseIf} $YTXEnableCepDebug == ${BST_CHECKED}
+    ${NSD_Check} $YTXCepDebugBox
+  ${EndIf}
+
+  ${NSD_CreateGroupBox} 0 151u 100% 150u "Browser extensions"
+  Pop $YTXBadge
+  ${NSD_CreateLabel} 12u 165u 22u 22u "Ch"
+  Pop $YTXBadge
+  SetCtlColors $YTXBadge "FFFFFF" "315ECC"
+  ${NSD_CreateCheckBox} 42u 165u 85% 22u "Google Chrome    ·    Detected"
+  Pop $YTXChromeBox
+  ${If} $YTXDetectedChrome != 1
+    ${NSD_SetText} $YTXChromeBox "Google Chrome    ·    Not detected"
+    EnableWindow $YTXChromeBox 0
+  ${ElseIf} $YTXInstallChrome == ${BST_CHECKED}
+    ${NSD_Check} $YTXChromeBox
+  ${EndIf}
+  ${NSD_CreateLabel} 12u 190u 22u 22u "Ed"
+  Pop $YTXBadge
+  SetCtlColors $YTXBadge "FFFFFF" "2578C8"
+  ${NSD_CreateCheckBox} 42u 190u 85% 22u "Microsoft Edge    ·    Detected"
+  Pop $YTXEdgeBox
+  ${If} $YTXDetectedEdge != 1
+    ${NSD_SetText} $YTXEdgeBox "Microsoft Edge    ·    Not detected"
+    EnableWindow $YTXEdgeBox 0
+  ${ElseIf} $YTXInstallEdge == ${BST_CHECKED}
+    ${NSD_Check} $YTXEdgeBox
+  ${EndIf}
+  ${NSD_CreateLabel} 12u 215u 22u 22u "Br"
+  Pop $YTXBadge
+  SetCtlColors $YTXBadge "FFFFFF" "252525"
+  ${NSD_CreateCheckBox} 42u 215u 85% 22u "Brave    ·    Detected"
+  Pop $YTXBraveBox
+  ${If} $YTXDetectedBrave != 1
+    ${NSD_SetText} $YTXBraveBox "Brave    ·    Not detected"
+    EnableWindow $YTXBraveBox 0
+  ${ElseIf} $YTXInstallBrave == ${BST_CHECKED}
+    ${NSD_Check} $YTXBraveBox
+  ${EndIf}
+  ${NSD_CreateLabel} 12u 240u 22u 22u "Op"
+  Pop $YTXBadge
+  SetCtlColors $YTXBadge "FFFFFF" "B83A27"
+  ${NSD_CreateCheckBox} 42u 240u 85% 22u "Opera    ·    Detected"
+  Pop $YTXOperaBox
+  ${If} $YTXDetectedOpera != 1
+    ${NSD_SetText} $YTXOperaBox "Opera    ·    Not detected"
+    EnableWindow $YTXOperaBox 0
+  ${ElseIf} $YTXInstallOpera == ${BST_CHECKED}
+    ${NSD_Check} $YTXOperaBox
+  ${EndIf}
+  ${NSD_CreateLabel} 12u 265u 22u 22u "Vi"
+  Pop $YTXBadge
+  SetCtlColors $YTXBadge "FFFFFF" "596575"
+  ${NSD_CreateCheckBox} 42u 265u 85% 22u "Vivaldi    ·    Detected"
+  Pop $YTXVivaldiBox
+  ${If} $YTXDetectedVivaldi != 1
+    ${NSD_SetText} $YTXVivaldiBox "Vivaldi    ·    Not detected"
+    EnableWindow $YTXVivaldiBox 0
+  ${ElseIf} $YTXInstallVivaldi == ${BST_CHECKED}
+    ${NSD_Check} $YTXVivaldiBox
+  ${EndIf}
+  ${NSD_CreateLabel} 0 305u 100% 22u "Browser setup opens each selected extension page. Enable Developer mode and load the YTX folder once."
+  Pop $YTXBadge
+  nsDialogs::Show
+FunctionEnd
+
+Function YTXIntegrationsPageLeave
+  ${NSD_GetState} $YTXPremiereBox $YTXInstallPremiere
+  ${NSD_GetState} $YTXAfterEffectsBox $YTXInstallAfterEffects
+  ${NSD_GetState} $YTXChromeBox $YTXInstallChrome
+  ${NSD_GetState} $YTXEdgeBox $YTXInstallEdge
+  ${NSD_GetState} $YTXBraveBox $YTXInstallBrave
+  ${NSD_GetState} $YTXOperaBox $YTXInstallOpera
+  ${NSD_GetState} $YTXVivaldiBox $YTXInstallVivaldi
+  ${NSD_GetState} $YTXCepDebugBox $YTXEnableCepDebug
+  StrCpy $YTXChoiceInitialized 1
+FunctionEnd
+!endif
 
 !macro removeLegacyClipForge LEGACY_DIR
   StrCpy $R5 "${LEGACY_DIR}"
@@ -97,96 +348,81 @@
     MessageBox MB_ICONSTOP "yt-dlp could not be installed from the bundled package (code $0). See $INSTDIR\python-install.log for setup details."
     Abort
   ${EndIf}
-  StrCpy $R6 0
-  StrCpy $R7 0
-  IfFileExists "$PROGRAMFILES64\Adobe\Adobe Premiere Pro 2026\Adobe Premiere Pro.exe" adobe_premiere_found
-  IfFileExists "$PROGRAMFILES64\Adobe\Adobe Premiere Pro 2025\Adobe Premiere Pro.exe" adobe_premiere_found
-  IfFileExists "$PROGRAMFILES64\Adobe\Adobe Premiere Pro 2024\Adobe Premiere Pro.exe" adobe_premiere_found
-  Goto adobe_check_aftereffects
-  adobe_premiere_found:
-  MessageBox MB_YESNO|MB_ICONQUESTION "Premiere Pro was detected. Install the YTX Bridge panel for Premiere Pro?" IDYES install_premiere_bridge IDNO adobe_check_aftereffects
-  install_premiere_bridge:
-  StrCpy $R6 1
-  adobe_check_aftereffects:
-  IfFileExists "$PROGRAMFILES64\Adobe\Adobe After Effects 2026\Support Files\AfterFX.exe" adobe_aftereffects_found
-  IfFileExists "$PROGRAMFILES64\Adobe\Adobe After Effects 2025\Support Files\AfterFX.exe" adobe_aftereffects_found
-  IfFileExists "$PROGRAMFILES64\Adobe\Adobe After Effects 2024\Support Files\AfterFX.exe" adobe_aftereffects_found
-  Goto adobe_choices_done
-  adobe_aftereffects_found:
-  MessageBox MB_YESNO|MB_ICONQUESTION "After Effects was detected. Install the YTX Bridge panel for After Effects?" IDYES install_aftereffects_bridge IDNO adobe_choices_done
-  install_aftereffects_bridge:
-  StrCpy $R7 1
-  adobe_choices_done:
-  StrCmp $R6 "1" install_adobe_bridge
-  StrCmp $R7 "1" install_adobe_bridge
-  Goto adobe_prompt_done
+  StrCmp $YTXInstallPremiere ${BST_CHECKED} install_adobe_bridge
+  StrCmp $YTXInstallAfterEffects ${BST_CHECKED} install_adobe_bridge browser_selection_start
   install_adobe_bridge:
-  DetailPrint "Installing the selected YTX Bridge Adobe panel(s)..."
+  DetailPrint "Installing the YTX Bridge panel for selected Adobe host(s)..."
   CreateDirectory "$APPDATA\Adobe\CEP\extensions\YTX-Bridge\CSXS"
   CreateDirectory "$APPDATA\Adobe\CEP\extensions\YTX-Bridge\jsx"
+  Delete "$APPDATA\Adobe\CEP\extensions\YTX-Bridge\CSXS\manifest.xml"
+  Delete "$APPDATA\Adobe\CEP\extensions\YTX-Bridge\CSXS\manifest-premiere.xml"
+  Delete "$APPDATA\Adobe\CEP\extensions\YTX-Bridge\CSXS\manifest-aftereffects.xml"
+  StrCmp $YTXInstallPremiere ${BST_CHECKED} 0 ytx_ae_manifest_only
+  StrCmp $YTXInstallAfterEffects ${BST_CHECKED} 0 ytx_premiere_manifest_only
   CopyFiles /SILENT "$INSTDIR\resources\adobe-bridge\CSXS\manifest.xml" "$APPDATA\Adobe\CEP\extensions\YTX-Bridge\CSXS"
+  Goto ytx_manifest_ready
+  ytx_ae_manifest_only:
+  CopyFiles /SILENT "$INSTDIR\resources\adobe-bridge\CSXS\manifest-aftereffects.xml" "$APPDATA\Adobe\CEP\extensions\YTX-Bridge\CSXS"
+  Rename "$APPDATA\Adobe\CEP\extensions\YTX-Bridge\CSXS\manifest-aftereffects.xml" "$APPDATA\Adobe\CEP\extensions\YTX-Bridge\CSXS\manifest.xml"
+  Goto ytx_manifest_ready
+  ytx_premiere_manifest_only:
+  CopyFiles /SILENT "$INSTDIR\resources\adobe-bridge\CSXS\manifest-premiere.xml" "$APPDATA\Adobe\CEP\extensions\YTX-Bridge\CSXS"
+  Rename "$APPDATA\Adobe\CEP\extensions\YTX-Bridge\CSXS\manifest-premiere.xml" "$APPDATA\Adobe\CEP\extensions\YTX-Bridge\CSXS\manifest.xml"
+  ytx_manifest_ready:
   CopyFiles /SILENT "$INSTDIR\resources\adobe-bridge\index.html" "$APPDATA\Adobe\CEP\extensions\YTX-Bridge"
   CopyFiles /SILENT "$INSTDIR\resources\adobe-bridge\panel.css" "$APPDATA\Adobe\CEP\extensions\YTX-Bridge"
   CopyFiles /SILENT "$INSTDIR\resources\adobe-bridge\panel.js" "$APPDATA\Adobe\CEP\extensions\YTX-Bridge"
   CopyFiles /SILENT "$INSTDIR\resources\adobe-bridge\jsx\host.jsx" "$APPDATA\Adobe\CEP\extensions\YTX-Bridge\jsx"
-  MessageBox MB_OK|MB_ICONINFORMATION "YTX Bridge was installed for the selected Adobe host(s). Restart Adobe and open Window > Extensions (Legacy) > YTX Bridge. If Adobe hides the unsigned local panel, follow Adobe's CEP developer-mode instructions for your host version."
-  adobe_prompt_done:
-  DetailPrint "Preparing the optional YTX YouTube helper for Chrome and Edge..."
+  StrCmp $YTXEnableCepDebug ${BST_CHECKED} 0 ytx_cep_debug_done
+  WriteRegStr HKCU "Software\Adobe\CSXS.12" "PlayerDebugMode" "1"
+  WriteRegStr HKCU "Software\Adobe\CSXS.13" "PlayerDebugMode" "1"
+  DetailPrint "Enabled Adobe CEP developer mode as an explicit installer selection."
+  ytx_cep_debug_done:
+  DetailPrint "YTX Bridge copied to the selected Adobe integration folder."
+  browser_selection_start:
+  StrCmp $YTXInstallChrome ${BST_CHECKED} copy_browser_extension
+  StrCmp $YTXInstallEdge ${BST_CHECKED} copy_browser_extension
+  StrCmp $YTXInstallBrave ${BST_CHECKED} copy_browser_extension
+  StrCmp $YTXInstallOpera ${BST_CHECKED} copy_browser_extension
+  StrCmp $YTXInstallVivaldi ${BST_CHECKED} copy_browser_extension skip_browser_extension
+  copy_browser_extension:
+  DetailPrint "Copying the YTX browser helper selected on the integrations page..."
   CreateDirectory "$LOCALAPPDATA\YTX\browser-extension"
+  CreateDirectory "$LOCALAPPDATA\YTX\browser-extension\icons"
   CopyFiles /SILENT "$INSTDIR\resources\browser-extension\manifest.json" "$LOCALAPPDATA\YTX\browser-extension"
   CopyFiles /SILENT "$INSTDIR\resources\browser-extension\content.js" "$LOCALAPPDATA\YTX\browser-extension"
   CopyFiles /SILENT "$INSTDIR\resources\browser-extension\README.txt" "$LOCALAPPDATA\YTX\browser-extension"
-  StrCpy $R3 ""
-  IfFileExists "$LOCALAPPDATA\Google\Chrome\Application\chrome.exe" chrome_found
-  IfFileExists "$PROGRAMFILES\Google\Chrome\Application\chrome.exe" chrome_found
-  IfFileExists "$PROGRAMFILES32\Google\Chrome\Application\chrome.exe" chrome_found
-  Goto browser_check_edge
-  chrome_found:
-  MessageBox MB_YESNO|MB_ICONQUESTION "Google Chrome is installed. Set up the YTX YouTube helper in Chrome? The browser will ask you to confirm Load unpacked once." IDYES chrome_setup IDNO browser_check_edge
-  chrome_setup:
+  CopyFiles /SILENT "$INSTDIR\resources\browser-extension\icons\icon-16.png" "$LOCALAPPDATA\YTX\browser-extension\icons"
+  CopyFiles /SILENT "$INSTDIR\resources\browser-extension\icons\icon-48.png" "$LOCALAPPDATA\YTX\browser-extension\icons"
+  CopyFiles /SILENT "$INSTDIR\resources\browser-extension\icons\icon-128.png" "$LOCALAPPDATA\YTX\browser-extension\icons"
   ExecShell "open" "$LOCALAPPDATA\YTX\browser-extension"
+  StrCmp $YTXInstallChrome ${BST_CHECKED} open_chrome_extensions
+  Goto chrome_extensions_done
+  open_chrome_extensions:
   ExecShell "open" "chrome://extensions"
-  browser_check_edge:
-  IfFileExists "$PROGRAMFILES64\Microsoft\Edge\Application\msedge.exe" edge_found
-  IfFileExists "$PROGRAMFILES32\Microsoft\Edge\Application\msedge.exe" edge_found
-  IfFileExists "$LOCALAPPDATA\Microsoft\Edge\Application\msedge.exe" edge_found
-  Goto browser_check_brave
-  edge_found:
-  MessageBox MB_YESNO|MB_ICONQUESTION "Microsoft Edge is installed. Set up the YTX YouTube helper in Edge? The browser will ask you to confirm Load unpacked once." IDYES edge_setup IDNO browser_check_brave
-  edge_setup:
-  ExecShell "open" "$LOCALAPPDATA\YTX\browser-extension"
+  chrome_extensions_done:
+  StrCmp $YTXInstallEdge ${BST_CHECKED} open_edge_extensions
+  Goto edge_extensions_done
+  open_edge_extensions:
   ExecShell "open" "microsoft-edge://extensions"
-  browser_check_brave:
-  IfFileExists "$LOCALAPPDATA\BraveSoftware\Brave-Browser\Application\brave.exe" brave_found
-  IfFileExists "$PROGRAMFILES64\BraveSoftware\Brave-Browser\Application\brave.exe" brave_found
-  IfFileExists "$PROGRAMFILES32\BraveSoftware\Brave-Browser\Application\brave.exe" brave_found
-  Goto browser_check_opera
-  brave_found:
-  MessageBox MB_YESNO|MB_ICONQUESTION "Brave is installed. Set up the YTX YouTube helper in Brave? The browser will ask you to confirm Load unpacked once." IDYES brave_setup IDNO browser_check_opera
-  brave_setup:
-  ExecShell "open" "$LOCALAPPDATA\YTX\browser-extension"
+  edge_extensions_done:
+  StrCmp $YTXInstallBrave ${BST_CHECKED} open_brave_extensions
+  Goto brave_extensions_done
+  open_brave_extensions:
   ExecShell "open" "brave://extensions"
-  browser_check_opera:
-  IfFileExists "$LOCALAPPDATA\Programs\Opera\launcher.exe" opera_found
-  IfFileExists "$PROGRAMFILES64\Opera\launcher.exe" opera_found
-  IfFileExists "$PROGRAMFILES32\Opera\launcher.exe" opera_found
-  Goto browser_check_vivaldi
-  opera_found:
-  MessageBox MB_YESNO|MB_ICONQUESTION "Opera is installed. Set up the YTX YouTube helper in Opera? The browser will ask you to confirm Load unpacked once." IDYES opera_setup IDNO browser_check_vivaldi
-  opera_setup:
-  ExecShell "open" "$LOCALAPPDATA\YTX\browser-extension"
+  brave_extensions_done:
+  StrCmp $YTXInstallOpera ${BST_CHECKED} open_opera_extensions
+  Goto opera_extensions_done
+  open_opera_extensions:
   ExecShell "open" "opera://extensions"
-  browser_check_vivaldi:
-  IfFileExists "$LOCALAPPDATA\Vivaldi\Application\vivaldi.exe" vivaldi_found
-  IfFileExists "$PROGRAMFILES64\Vivaldi\Application\vivaldi.exe" vivaldi_found
-  IfFileExists "$PROGRAMFILES32\Vivaldi\Application\vivaldi.exe" vivaldi_found
-  Goto browser_prompt_done
-  vivaldi_found:
-  MessageBox MB_YESNO|MB_ICONQUESTION "Vivaldi is installed. Set up the YTX YouTube helper in Vivaldi? The browser will ask you to confirm Load unpacked once." IDYES vivaldi_setup IDNO browser_prompt_done
-  vivaldi_setup:
-  ExecShell "open" "$LOCALAPPDATA\YTX\browser-extension"
+  opera_extensions_done:
+  StrCmp $YTXInstallVivaldi ${BST_CHECKED} open_vivaldi_extensions
+  Goto vivaldi_extensions_done
+  open_vivaldi_extensions:
   ExecShell "open" "vivaldi://extensions"
-  browser_prompt_done:
+  vivaldi_extensions_done:
+  MessageBox MB_OK|MB_ICONINFORMATION "For each selected browser, turn on Developer mode and choose Load unpacked. Select the YTX browser-extension folder that just opened."
+  skip_browser_extension:
   CreateDirectory "$LOCALAPPDATA\YTX"
   FileOpen $R4 "$LOCALAPPDATA\YTX\install-complete.flag" w
   IfErrors +2
