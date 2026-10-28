@@ -8,7 +8,7 @@ Install Node.js and Python 3, then run `npm install` and `npm start`. In develop
 
 ## Build the Windows installer
 
-Run `npm install`, then `npm run installer`. The output is `dist/YTX-Setup-1.1.6.exe`. It bundles the official Python 3.12.10 installer, an offline yt-dlp wheel, and FFmpeg. Setup installs Python and its isolated virtual environment in the app's resources when writable, and retries in `%LOCALAPPDATA%\YTX` if needed. It installs yt-dlp offline and places the Adobe CEP bridge in the user's Adobe extensions folder. Users do not need a separate Python, yt-dlp, or FFmpeg installation. The Adobe bridge panel is available from Window → Extensions (Legacy) → YTX Bridge when CEP extensions are enabled in the Adobe host.
+Run `npm install`, then `npm run installer`. The output is `dist/YTX-Setup-1.1.8.exe`. It bundles the official Python 3.12.10 installer, an offline yt-dlp wheel, and FFmpeg. Setup installs Python and its isolated virtual environment in the app's resources when writable, and retries in `%LOCALAPPDATA%\YTX` if needed. Setup detects Premiere Pro and After Effects separately and asks which hosts should receive the YTX CEP bridge panel. It also asks whether to set up the extension in each detected Chrome, Edge, or Brave installation. Chromium requires a one-time user confirmation: enable Developer mode and choose Load unpacked for the bundled YTX extension folder. Users do not need a separate Python, yt-dlp, or FFmpeg installation.
 
 Copyright © 2026 ARYAN ARYA.
 
@@ -22,5 +22,5 @@ This is a compact first version. It does not include multitrack editing, effects
 
 ## Downloads and updates
 
-The in-app Downloads Center tracks recent downloads, batch conversions, and update installer downloads. The Updates tab checks the public GitHub Releases feed for pixelstoLogic/YTX and can download the latest YTX-Setup installer into your Downloads folder. The app shows the release notes and verifies GitHub's published SHA-256 digest when present. The installer is opened only after you choose Open downloaded installer.
+The in-app Downloads Center tracks recent downloads, batch conversions, and update installer downloads. The Updates tab checks the public GitHub Releases feed for pixelstoLogic/YTX and can download the latest YTX-Setup installer into your Downloads folder. The app shows release notes, verifies GitHub's published SHA-256 digest when present, and starts the installer after verification.
 
