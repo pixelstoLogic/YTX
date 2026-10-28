@@ -1,0 +1,14 @@
+node_modules/
+dist/
+__pycache__/
+*.py[cod]
+*.log
+smoke-*
+.DS_Store
+Thumbs.db
+build/resources/bootstrap/python-installer/*.exe
+build/resources/bootstrap/python-wheels/*.whl
+build/resources/ffmpeg/ffmpeg.exe
+build/ytx.ico
+build/ytx-256.png
+
