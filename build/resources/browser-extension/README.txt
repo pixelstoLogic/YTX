@@ -1,7 +1,7 @@
-YTX YouTube Trim Handoff — Chrome and Edge
+YTX YouTube Trim Handoff — Chrome, Edge, Brave, Opera, and Vivaldi
 
 YTX cannot silently install or enable a browser extension. To add the optional YouTube button:
-1. Open chrome://extensions (Chrome) or edge://extensions (Edge).
+1. Open the browser's Extensions page (chrome://extensions, edge://extensions, brave://extensions, opera://extensions, or vivaldi://extensions).
 2. Turn on Developer mode.
 3. Choose Load unpacked and select this folder.
 
