@@ -1,13 +1,15 @@
 /*
- * Per-user integration installer for YTX.
+ * Integration installer for YTX.
  *
- * Browser extension installation intentionally uses Chromium enterprise policy
- * (ExtensionInstallForcelist) instead of Chrome's Developer mode. This is the
- * only supported way to install an extension for a normal user without manual
- * confirmation. The policy points at the signed CRX/update manifest published
- * with every YTX GitHub release.
+ * Browser extensions are installed with Chromium enterprise policy
+ * (ExtensionInstallForcelist), which is the supported way to install an
+ * extension without interactive Developer mode steps. The per-machine
+ * installer writes HKLM policies while elevated. When YTX runs without
+ * elevation it first tries HKLM, then HKCU, and finally offers a single UAC
+ * approval that applies the machine policy through reg.exe.
  */
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFile, execFileSync } = require('node:child_process');
@@ -75,9 +77,9 @@ function createIntegrationManager(options) {
     ].filter(Boolean);
   }
 
-  function regQuery(key, valueName) {
+  function regQuery(root, key, valueName) {
     try {
-      const args = ['QUERY', `HKCU\\${key}`];
+      const args = ['QUERY', `${root}\\${key}`];
       if (valueName === '') args.push('/ve');
       else args.push('/v', valueName);
       const output = execFileSync('reg.exe', args, { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
@@ -86,21 +88,28 @@ function createIntegrationManager(options) {
     } catch { return ''; }
   }
 
-  function regSet(key, valueName, value) {
+  function regKeyExists(root, key) {
     try {
-      execFileSync('reg.exe', ['ADD', `HKCU\\${key}`, '/v', valueName, '/t', 'REG_SZ', '/d', String(value), '/f'], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
+      execFileSync('reg.exe', ['QUERY', `${root}\\${key}`], { windowsHide: true, stdio: 'ignore' });
+      return true;
+    } catch { return false; }
+  }
+
+  function regSet(root, key, valueName, value) {
+    try {
+      execFileSync('reg.exe', ['ADD', `${root}\\${key}`, '/v', valueName, '/t', 'REG_SZ', '/d', String(value), '/f'], { windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
     } catch (error) {
       const detail = String(error.stderr || '').replace(/^ERROR:\s*/i, '').split(/\r?\n/)[0].replace(/\.\s*$/, '').trim();
       throw new Error(detail ? `Windows blocked the registry write: ${detail.toLowerCase()}.` : 'Windows blocked the registry write.');
     }
   }
 
-  function regDelete(key, valueName) {
-    try { execFileSync('reg.exe', ['DELETE', `HKCU\\${key}`, '/v', valueName, '/f'], { windowsHide: true, stdio: 'ignore' }); } catch {}
+  function regDelete(root, key, valueName) {
+    try { execFileSync('reg.exe', ['DELETE', `${root}\\${key}`, '/v', valueName, '/f'], { windowsHide: true, stdio: 'ignore' }); } catch {}
   }
 
-  function regDeleteTree(key) {
-    try { execFileSync('reg.exe', ['DELETE', `HKCU\\${key}`, '/f'], { windowsHide: true, stdio: 'ignore' }); } catch {}
+  function regDeleteTree(root, key) {
+    try { execFileSync('reg.exe', ['DELETE', `${root}\\${key}`, '/f'], { windowsHide: true, stdio: 'ignore' }); } catch {}
   }
 
   function findExecutable(appPath) {
@@ -163,28 +172,163 @@ function createIntegrationManager(options) {
     fs.cpSync(source, target, { recursive: true, force: true });
   }
 
-  function findPolicySlot(policyKey, entry) {
+  function findPolicySlot(root, policyKey, entry) {
     for (let slot = 1; slot <= 60; slot++) {
-      const existing = regQuery(`${policyKey}\\ExtensionInstallForcelist`, String(slot));
+      const existing = regQuery(root, `${policyKey}\\ExtensionInstallForcelist`, String(slot));
       if (!existing) return { slot, existing: false };
       if (existing.toLowerCase() === entry.toLowerCase()) return { slot, existing: true };
     }
     return null;
   }
 
+  function policyResult(browser, found, root) {
+    return {
+      ok: true,
+      browser: browser.id,
+      name: browser.name,
+      slot: found.slot,
+      existing: found.existing,
+      scope: root === 'HKLM' ? 'machine' : 'user',
+      message: found.existing ? 'Already installed.' : 'Extension policy installed.'
+    };
+  }
+
+  function writePolicyMarker(root, browser, entry, slot) {
+    try {
+      regSet(root, `${POLICY_MARKER}\\Policies\\${browser.id}`, 'Key', browser.policy);
+      regSet(root, `${POLICY_MARKER}\\Policies\\${browser.id}`, 'ValueName', String(slot));
+      regSet(root, `${POLICY_MARKER}\\Policies\\${browser.id}`, 'Entry', entry);
+    } catch {}
+  }
+
   function installPolicy(browser, extensionId) {
     if (!browser.policy) return { ok: false, browser: browser.id, name: browser.name, message: 'This browser does not expose a managed policy key.' };
     const entry = `${extensionId};${updateUrl}`;
     const policyKey = `${browser.policy}\\ExtensionInstallForcelist`;
-    const found = findPolicySlot(browser.policy, entry);
-    if (!found) return { ok: false, browser: browser.id, name: browser.name, message: 'The browser policy already contains 60 extension rules.' };
-    regSet(policyKey, String(found.slot), entry);
-    const verified = regQuery(policyKey, String(found.slot));
-    if (verified.toLowerCase() !== entry.toLowerCase()) return { ok: false, browser: browser.id, name: browser.name, message: 'Windows could not write the browser policy.' };
-    regSet(`${POLICY_MARKER}\\Policies\\${browser.id}`, 'Key', browser.policy);
-    regSet(`${POLICY_MARKER}\\Policies\\${browser.id}`, 'ValueName', String(found.slot));
-    regSet(`${POLICY_MARKER}\\Policies\\${browser.id}`, 'Entry', entry);
-    return { ok: true, browser: browser.id, name: browser.name, slot: found.slot, existing: found.existing, message: found.existing ? 'Already installed by YTX.' : 'Extension policy installed.' };
+    const errors = [];
+
+    // Machine policy survives user changes and needs no Developer mode. It is
+    // the primary path; a per-user policy is only a fallback on locked PCs.
+    const machine = findPolicySlot('HKLM', browser.policy, entry);
+    if (machine) {
+      try {
+        regSet('HKLM', policyKey, String(machine.slot), entry);
+        if (regQuery('HKLM', policyKey, String(machine.slot)).toLowerCase() === entry.toLowerCase()) {
+          writePolicyMarker('HKLM', browser, entry, machine.slot);
+          return policyResult(browser, machine, 'HKLM');
+        }
+        errors.push('Windows did not retain the machine policy.');
+      } catch (error) { errors.push(error.message); }
+    } else {
+      errors.push('The machine policy list is full.');
+    }
+
+    const user = findPolicySlot('HKCU', browser.policy, entry);
+    if (user) {
+      try {
+        regSet('HKCU', policyKey, String(user.slot), entry);
+        if (regQuery('HKCU', policyKey, String(user.slot)).toLowerCase() === entry.toLowerCase()) {
+          writePolicyMarker('HKCU', browser, entry, user.slot);
+          return policyResult(browser, user, 'HKCU');
+        }
+        errors.push('Windows did not retain the user policy.');
+      } catch (error) { errors.push(error.message); }
+    } else {
+      errors.push('The user policy list is full.');
+    }
+
+    if (!machine) {
+      return { ok: false, browser: browser.id, name: browser.name, message: 'The browser policy list is full. Remove an unused policy and try again.' };
+    }
+    return {
+      ok: false,
+      browser: browser.id,
+      name: browser.name,
+      needsElevation: true,
+      policyKey,
+      slot: machine.slot,
+      entry,
+      message: errors[0] || 'Administrator approval is required to register this browser.'
+    };
+  }
+
+  function escapeReg(value) {
+    return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  }
+
+  function runElevatedRegistry(regText) {
+    const folder = path.join(os.tmpdir(), 'ytx-elevation');
+    fs.mkdirSync(folder, { recursive: true });
+    const file = path.join(folder, `policies-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.reg`);
+    fs.writeFileSync(file, regText, 'utf8');
+    const command = [
+      "$ErrorActionPreference='Stop'",
+      'try {',
+      `  $p = Start-Process -FilePath "$env:SystemRoot\\System32\\reg.exe" -ArgumentList @('import', '"${file.replace(/'/g, "''")}"') -Verb RunAs -Wait -PassThru -WindowStyle Hidden`,
+      '  exit $p.ExitCode',
+      '} catch { exit 1223 }'
+    ].join('\n');
+    try {
+      execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', command], {
+        windowsHide: true,
+        timeout: 180000,
+        stdio: ['ignore', 'ignore', 'ignore']
+      });
+      return { ok: true, file };
+    } catch (error) {
+      return { ok: false, code: error.status || 1, file };
+    } finally {
+      try { fs.unlinkSync(file); } catch {}
+    }
+  }
+
+  function applyPoliciesElevated(pending, extensionId) {
+    if (!pending.length) return [];
+    const lines = ['Windows Registry Editor Version 5.00', ''];
+    const grouped = new Map();
+    for (const item of pending) {
+      if (!grouped.has(item.policyKey)) grouped.set(item.policyKey, []);
+      grouped.get(item.policyKey).push(item);
+    }
+    for (const [policyKey, entries] of grouped) {
+      lines.push(`[HKEY_LOCAL_MACHINE\\${policyKey}]`);
+      for (const entry of entries) lines.push(`"${entry.slot}"="${escapeReg(entry.entry)}"`);
+      lines.push('');
+    }
+    lines.push('[HKEY_LOCAL_MACHINE\\Software\\YTX\\BrowserExtension]');
+    lines.push(`"ExtensionId"="${escapeReg(extensionId)}"`);
+    lines.push(`"UpdateUrl"="${escapeReg(updateUrl)}"`);
+    lines.push('"Scope"="machine"');
+    lines.push(`"InstalledAt"="${new Date().toISOString()}"`);
+    lines.push(`"Browsers"="${escapeReg(pending.map(item => item.browser).join(','))}"`);
+    lines.push('');
+    for (const item of pending) {
+      lines.push(`[HKEY_LOCAL_MACHINE\\Software\\YTX\\BrowserExtension\\Policies\\${item.browser}]`);
+      lines.push(`"Key"="${escapeReg(item.policyKey.replace(/\\ExtensionInstallForcelist$/i, ''))}"`);
+      lines.push(`"ValueName"="${item.slot}"`);
+      lines.push(`"Entry"="${escapeReg(item.entry)}"`);
+      lines.push('');
+    }
+
+    const elevation = runElevatedRegistry(lines.join('\r\n'));
+    if (!elevation.ok) {
+      return pending.map(item => ({
+        ok: false,
+        browser: item.browser,
+        name: item.name,
+        needsElevation: true,
+        message: elevation.code === 1223
+          ? 'Administrator approval was not granted. The browser extension was not registered.'
+          : 'Windows could not apply the machine browser policy. Try installing YTX again with administrator approval.'
+      }));
+    }
+
+    return pending.map(item => {
+      const verified = regQuery('HKLM', item.policyKey, String(item.slot));
+      return verified.toLowerCase() === item.entry.toLowerCase()
+        ? { ok: true, browser: item.browser, name: item.name, scope: 'machine', elevated: true, slot: item.slot, message: 'Extension policy installed with administrator approval.' }
+        : { ok: false, browser: item.browser, name: item.name, needsElevation: true, message: 'Windows accepted the request but the machine policy is not present.' };
+    });
   }
 
   function installBrowserExtension(request = {}) {
@@ -199,7 +343,7 @@ function createIntegrationManager(options) {
       const requested = Array.isArray(request.browserIds) && request.browserIds.length
         ? new Set(request.browserIds)
         : new Set(detected.filter(item => item.installed).map(item => item.id));
-      const results = [];
+      let results = [];
       for (const browser of detected) {
         if (!requested.has(browser.id)) continue;
         if (!browser.installed) {
@@ -210,59 +354,107 @@ function createIntegrationManager(options) {
         catch (error) { results.push({ ok: false, browser: browser.id, name: browser.name, message: `Policy write failed: ${error.message}` }); }
       }
 
-      const successful = results.filter(item => item.ok);
-      if (successful.length) {
-        try {
-          regSet(POLICY_MARKER, 'ExtensionId', info.extensionId);
-          regSet(POLICY_MARKER, 'UpdateUrl', updateUrl);
-          regSet(POLICY_MARKER, 'InstalledAt', new Date().toISOString());
-          regSet(POLICY_MARKER, 'Browsers', successful.map(item => item.browser).join(','));
-        } catch {}
-      } else {
-        regDeleteTree(POLICY_MARKER);
+      let elevated = false;
+      const pending = results.filter(item => item.needsElevation);
+      if (pending.length && request.allowElevation !== false) {
+        const elevatedResults = applyPoliciesElevated(pending, info.extensionId);
+        elevated = elevatedResults.some(item => item.ok && item.elevated);
+        results = results.map(item => {
+          if (!item.needsElevation) return item;
+          return elevatedResults.find(entry => entry.browser === item.browser) || item;
+        });
       }
+
+      const successful = results.filter(item => item.ok);
+      const machineSuccess = successful.filter(item => item.scope === 'machine');
+      const userSuccess = successful.filter(item => item.scope === 'user');
+      if (machineSuccess.length) {
+        try {
+          regSet('HKLM', POLICY_MARKER, 'ExtensionId', info.extensionId);
+          regSet('HKLM', POLICY_MARKER, 'UpdateUrl', updateUrl);
+          regSet('HKLM', POLICY_MARKER, 'InstalledAt', new Date().toISOString());
+          regSet('HKLM', POLICY_MARKER, 'Browsers', machineSuccess.map(item => item.browser).join(','));
+          regSet('HKLM', POLICY_MARKER, 'Scope', 'machine');
+        } catch {}
+      }
+      if (userSuccess.length) {
+        try {
+          regSet('HKCU', POLICY_MARKER, 'ExtensionId', info.extensionId);
+          regSet('HKCU', POLICY_MARKER, 'UpdateUrl', updateUrl);
+          regSet('HKCU', POLICY_MARKER, 'InstalledAt', new Date().toISOString());
+          regSet('HKCU', POLICY_MARKER, 'Browsers', userSuccess.map(item => item.browser).join(','));
+          regSet('HKCU', POLICY_MARKER, 'Scope', 'user');
+        } catch {}
+      }
+      if (!successful.length) {
+        if (!machineSuccess.length) regDeleteTree('HKCU', POLICY_MARKER);
+      }
+      const names = successful.map(item => item.name).join(', ');
+      const blocked = results.filter(item => !item.ok);
+      const needsElevation = blocked.some(item => item.needsElevation);
       return {
         ok: successful.length > 0,
         extensionId: info.extensionId,
         version: info.version,
         path: extensionTarget,
         updateUrl,
+        scope: machineSuccess.length ? 'machine' : userSuccess.length ? 'user' : '',
+        elevated,
         results,
         restartedBrowserRequired: successful.length > 0,
+        needsElevation,
         message: successful.length
-          ? `YTX ${info.version} was registered in ${successful.map(item => item.name).join(', ')}. Restart those browsers; the extension opens automatically on YouTube.`
-          : results.length
-            ? 'Windows blocked automatic browser setup. Turn on Developer mode and use Load unpacked with the extension folder below, or re-run YTX setup as this user.'
-            : 'No supported browser was found. Open the extension folder and use Load unpacked as a fallback.'
+          ? `YTX ${info.version} is registered in ${names}. Restart ${successful.length === 1 ? 'that browser' : 'those browsers'} to finish installation.`
+          : needsElevation
+            ? 'Windows requires administrator approval to register the browser extension. Select Authorize browser integration and approve the Windows prompt.'
+            : 'No supported browser was found. Install Chrome, Edge, Brave, Vivaldi, or Opera and run the setup again.'
       };
     } catch (error) {
       return { error: `Could not install the browser extension: ${error.message}` };
     }
   }
 
+  function collectPolicyValues(root, browser, extensionId) {
+    const values = [];
+    for (let slot = 1; slot <= 60; slot++) {
+      const current = regQuery(root, `${browser.policy}\\ExtensionInstallForcelist`, String(slot));
+      if (current && current.toLowerCase().includes(extensionId.toLowerCase())) values.push(slot);
+    }
+    return values;
+  }
+
   function removeBrowserExtension() {
     const info = readExtensionInfo();
-    const policies = [];
+    const removed = [];
+    const machineCleanup = [];
     for (const browser of BROWSERS) {
-      const storedKey = regQuery(`${POLICY_MARKER}\\Policies\\${browser.id}`, 'Key') || browser.policy;
-      const storedSlot = regQuery(`${POLICY_MARKER}\\Policies\\${browser.id}`, 'ValueName');
-      const entry = regQuery(`${POLICY_MARKER}\\Policies\\${browser.id}`, 'Entry') || `${info.extensionId};${updateUrl}`;
-      if (storedSlot) {
-        const current = regQuery(`${storedKey}\\ExtensionInstallForcelist`, storedSlot);
-        if (!current || current.toLowerCase() === entry.toLowerCase()) regDelete(`${storedKey}\\ExtensionInstallForcelist`, storedSlot);
-        policies.push({ browser: browser.id, removed: true });
+      for (const root of ['HKLM', 'HKCU']) {
+        for (const slot of collectPolicyValues(root, browser, info.extensionId)) {
+          if (root === 'HKLM') machineCleanup.push({ policyKey: `${browser.policy}\\ExtensionInstallForcelist`, slot });
+          else regDelete('HKCU', `${browser.policy}\\ExtensionInstallForcelist`, String(slot));
+          removed.push({ browser: browser.id, scope: root === 'HKLM' ? 'machine' : 'user', slot });
+        }
       }
     }
-    // Also clean values left by the NSIS installer or an older YTX build.
-    for (const browser of BROWSERS) {
-      for (let slot = 1; slot <= 60; slot++) {
-        const current = regQuery(`${browser.policy}\\ExtensionInstallForcelist`, String(slot));
-        if (!current) continue;
-        if (current.toLowerCase().includes(info.extensionId.toLowerCase())) regDelete(`${browser.policy}\\ExtensionInstallForcelist`, String(slot));
+    if (machineCleanup.length) {
+      const lines = ['Windows Registry Editor Version 5.00', ''];
+      const grouped = new Map();
+      for (const item of machineCleanup) {
+        if (!grouped.has(item.policyKey)) grouped.set(item.policyKey, []);
+        grouped.get(item.policyKey).push(item.slot);
       }
+      for (const [policyKey, slots] of grouped) {
+        lines.push(`[HKEY_LOCAL_MACHINE\\${policyKey}]`);
+        for (const slot of slots) lines.push(`"${slot}"=-`);
+        lines.push('');
+      }
+      lines.push('[HKEY_LOCAL_MACHINE\\Software\\YTX\\BrowserExtension]');
+      lines.push('');
+      const elevation = runElevatedRegistry(lines.join('\r\n'));
+      if (!elevation.ok) return { ok: false, needsElevation: true, removed, message: 'Administrator approval is required to remove the machine browser policy.' };
     }
-    regDeleteTree(POLICY_MARKER);
-    return { ok: true, policies };
+    regDeleteTree('HKCU', POLICY_MARKER);
+    return { ok: true, removed, message: removed.length ? 'The YTX browser extension policy was removed.' : 'No YTX browser policy was present.' };
   }
 
   function detectAdobeHosts() {
@@ -318,7 +510,7 @@ function createIntegrationManager(options) {
     const cepDebug = [];
     for (let version = 9; version <= 14; version++) {
       try {
-        regSet(`Software\\Adobe\\CSXS.${version}`, 'PlayerDebugMode', '1');
+        regSet('HKCU', `Software\\Adobe\\CSXS.${version}`, 'PlayerDebugMode', '1');
         cepDebug.push(version);
       } catch {}
     }
@@ -349,7 +541,7 @@ function createIntegrationManager(options) {
   function getAdobeBridgeStatus() {
     const config = readBridgeConfig();
     const debug = {};
-    for (let version = 9; version <= 14; version++) debug[`CSXS.${version}`] = regQuery(`Software\\Adobe\\CSXS.${version}`, 'PlayerDebugMode');
+    for (let version = 9; version <= 14; version++) debug[`CSXS.${version}`] = regQuery('HKCU', `Software\\Adobe\\CSXS.${version}`, 'PlayerDebugMode');
     let marker = null;
     try { marker = JSON.parse(fs.readFileSync(path.join(bridgeTarget, '.ytx-bridge.json'), 'utf8')); } catch {}
     let hosts = marker && Array.isArray(marker.hosts) ? marker.hosts : [];
@@ -377,13 +569,27 @@ function createIntegrationManager(options) {
     const policies = [];
     for (const browser of BROWSERS) {
       let installed = false;
-      for (let slot = 1; slot <= 60; slot++) {
-        const current = regQuery(`${browser.policy}\\ExtensionInstallForcelist`, String(slot));
-        if (current.toLowerCase().includes(info.extensionId.toLowerCase())) { installed = true; break; }
+      let scope = '';
+      for (const root of ['HKLM', 'HKCU']) {
+        for (let slot = 1; slot <= 60; slot++) {
+          const current = regQuery(root, `${browser.policy}\\ExtensionInstallForcelist`, String(slot));
+          if (current.toLowerCase().includes(info.extensionId.toLowerCase())) { installed = true; scope = root === 'HKLM' ? 'machine' : 'user'; break; }
+        }
+        if (installed) break;
       }
-      policies.push({ id: browser.id, name: browser.name, installed });
+      policies.push({ id: browser.id, name: browser.name, installed, scope });
     }
-    return { installed: fs.existsSync(path.join(extensionTarget, 'manifest.json')), path: extensionTarget, extensionId: info.extensionId, version: info.version, updateUrl, policies };
+    const machine = policies.filter(item => item.scope === 'machine');
+    return {
+      installed: fs.existsSync(path.join(extensionTarget, 'manifest.json')),
+      path: extensionTarget,
+      extensionId: info.extensionId,
+      version: info.version,
+      updateUrl,
+      policies,
+      scope: machine.length ? 'machine' : policies.some(item => item.scope === 'user') ? 'user' : '',
+      registered: policies.some(item => item.installed)
+    };
   }
 
   async function isProcessRunning(imageName) {

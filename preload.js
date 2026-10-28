@@ -1,10 +1,19 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 contextBridge.exposeInMainWorld('studio', {
   getBackendStatus: () => ipcRenderer.invoke('media:status'),
   resolveUrl: url => ipcRenderer.invoke('media:resolve', url),
   downloadSection: options => ipcRenderer.invoke('media:download-section', options),
   exportMedia: options => ipcRenderer.invoke('media:export', options),
-  convertBatch: options => ipcRenderer.invoke('media:convert-batch', options),
+  pickMediaFiles: () => ipcRenderer.invoke('media:pick-files'),
+  describeMediaFiles: paths => ipcRenderer.invoke('media:describe-files', paths),
+  chooseOutputFolder: () => ipcRenderer.invoke('media:choose-output-folder'),
+  defaultOutput: () => ipcRenderer.invoke('media:default-output'),
+  convertMedia: options => ipcRenderer.invoke('media:convert', options),
+  cancelConvert: () => ipcRenderer.invoke('media:cancel-convert'),
+  getPerformanceProfile: () => ipcRenderer.invoke('app:performance'),
+  pathForFile: file => {
+    try { return webUtils.getPathForFile(file); } catch { return ''; }
+  },
   importToAdobe: options => ipcRenderer.invoke('media:import-adobe', options),
   openMedia: () => ipcRenderer.invoke('media:open'),
   revealFile: filePath => ipcRenderer.invoke('media:reveal-file', filePath),

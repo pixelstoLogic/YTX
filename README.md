@@ -1,6 +1,6 @@
 # YTX Studio
 
-A small Electron desktop app for resolving and previewing an online video before downloading only a trimmed range. Electron starts a persistent local Python bridge when the app opens; yt-dlp resolves the online preview and downloads selected sections, while FFmpeg handles exports from local files.
+YTX Studio is a local media workspace for trimming online video, converting and compressing batches, and handing finished media to Adobe editing projects. Electron starts a persistent local Python bridge when the app opens; yt-dlp resolves online previews and downloads selected ranges, while FFmpeg handles exports, conversion, and compression.
 
 ## Run from source
 
@@ -8,7 +8,11 @@ Install Node.js and Python 3, then run `npm install` and `npm start`. In develop
 
 ## Build the Windows installer
 
-Run `npm install`, then `npm run installer`. The output is `dist/YTX-Setup-1.2.0.exe`. Run `npm run release:assets` afterwards to write `dist/SHA256SUMS.txt` and `dist/release-notes.md`, which is exactly what the release workflow publishes. It bundles the official Python 3.12.10 installer, an offline yt-dlp wheel, FFmpeg, and the signed browser extension. Setup installs Python and its isolated virtual environment in the app's resources when writable, and retries in `%LOCALAPPDATA%\YTX` if needed. The integrations page lists detected Premiere Pro, After Effects, Chrome, Edge, Brave, Opera, and Vivaldi with separate checkboxes. Selected Adobe hosts receive a host-specific YTX Bridge panel. The Adobe CEP developer-mode checkbox enables the unsigned local panel for this Windows user, and YTX repairs the panel on every launch. Selected Chromium browsers receive a per-user `ExtensionInstallForcelist` policy that points at the signed extension in the latest GitHub release, so no Developer mode or Load unpacked step is required; restart the browser once after setup. Managed browser policies can block this, in which case the extension folder remains available as a manual fallback. Users do not need a separate Python, yt-dlp, or FFmpeg installation.
+Run `npm install`, then `npm run installer`. The output is `dist/YTX-Setup-1.3.0.exe`. Run `npm run release:assets` afterwards to write `dist/SHA256SUMS.txt` and `dist/release-notes.md`, which is exactly what the release workflow publishes.
+
+Setup installs for every user on the PC and requests administrator approval once. It bundles the official Python 3.12.10 installer, an offline yt-dlp wheel, FFmpeg, and the signed browser extension. Python and its isolated virtual environment live in the app's resources when writable, with a `%LOCALAPPDATA%\YTX` retry if needed. The integrations page lists detected Premiere Pro, After Effects, Chrome, Edge, Brave, Opera, and Vivaldi with separate checkboxes. Selected Adobe hosts receive a host-specific YTX Bridge panel; the Adobe CEP developer-mode checkbox enables the unsigned local panel for this Windows user, and YTX repairs the panel on every launch.
+
+Selected Chromium browsers receive machine-wide `ExtensionInstallForcelist` policies under `HKLM` that point at the signed extension in the latest GitHub release, so no Developer mode or Load unpacked step is required; restart the browser once after setup. If an organization locks policy keys, YTX reports the policy scope and offers a UAC-approved repair. The extension folder also remains available as a manual fallback. Users do not need a separate Python, yt-dlp, or FFmpeg installation.
 
 Copyright © 2026 ARYAN ARYA.
 
@@ -16,9 +20,21 @@ The setup welcome page and application display `© 2026 ARYAN ARYA`. Third-party
 
 Paste a video URL and press the arrow to resolve an online preview without downloading the whole video. Use the timeline handles or mark in/out controls, then choose a stream quality and Download video or Download audio to save the selected range. Local video files can also be opened and exported through FFmpeg with quality settings.
 
-Timeline in/out fields accept `HH:MM:SS:FF` timecode at 30 fps. The playhead can be dragged continuously to scrub. The installer places the YTX CEP panel in the per-user Adobe extensions folder. Restart Premiere Pro or After Effects, open **Window → Extensions (Legacy) → YTX Bridge**, then use YTX's Premiere/After Effects actions to render the selected range and insert it into the open timeline or composition. In the Adobe panel, **Send selected media to YTX** returns selected project footage to the editor. YTX reports a host as connected while its bridge panel is open and responding.
+Timeline in/out fields accept `HH:MM:SS:FF` timecode at 30 fps. The playhead can be dragged continuously to scrub.
 
-This is a compact first version. It does not include multitrack editing, effects, or project saving yet.
+## Conversion and compression
+
+Open **Conversion** to build a batch from video, audio, or image files. Drop media onto the workspace or use **Choose files**; each queue item shows a preview thumbnail and its own output format. **Convert** changes containers and codecs, while **Compress** applies Light, Balanced, or Maximum presets for smaller files. The engine tunes worker and encoder-thread counts to the computer's CPU and memory, renders the batch with live per-file progress, and keeps files that finished before a cancellation. Recent activity records completed, failed, and cancelled jobs separately.
+
+## Adobe handoff
+
+The installer places the YTX CEP panel in the per-user Adobe extensions folder. Restart Premiere Pro or After Effects, open **Window → Extensions (Legacy) → YTX Bridge**, then use YTX's Premiere/After Effects actions to render the selected range and insert it into the open timeline or composition. The panel lists media managed in the saved project's `YTX Media` folder, links that media to the project file, and writes `.ytx-media.json` metadata when assets are imported. **Insert** and **Insert again** place a managed asset on the active timeline or composition, while **Send selected media to YTX** returns selected project footage to the editor. YTX reports a host as connected only while its bridge panel is open and responding, and disables Send actions for hosts that are offline.
+
+YTX focuses on single-clip trimming, batch conversion, and Adobe handoff. It does not include multitrack editing, effects, or project saving yet.
+
+## Browser extension
+
+The signed YouTube helper adds **Open in YTX** to watch pages, Shorts, live streams, and `youtu.be` links. It follows YouTube's SPA navigation, so moving between videos updates or removes the button without a reload. Choosing it hands the canonical `watch?v=` URL to YTX Studio for preview and trimming.
 
 ## Downloads and updates
 
@@ -27,11 +43,11 @@ The in-app Downloads Center tracks recent downloads, batch conversions, and upda
 ## Versioned releases
 
 1. Update `package.json`, `build/resources/browser-extension/manifest.json`, and `CHANGELOG.md` to the same version.
-2. Commit and push `main`, then push a matching tag: `git tag v1.2.0 && git push origin v1.2.0`.
+2. Commit and push `main`, then push a matching tag: `git tag v1.3.0 && git push origin v1.3.0`.
 3. The `Build and publish YTX release` workflow checks out the tag, validates all three version fields, builds the installer, signs the extension as CRX3, writes `updates.xml` and `SHA256SUMS.txt`, and publishes them on the GitHub release.
 4. A release is marked GitHub “latest” only when no higher stable version exists. The app always selects the highest stable release by semantic version and never installs a lower build unless the user explicitly chooses it from version history.
 5. The extension signing key is **not** committed to this public repository; `build/keys/` is gitignored. Add the contents of `build/keys/ytx-extension-key.pem` as the `YTX_EXTENSION_KEY` repository secret so CI signs with extension ID `ibbnkdcefianlglmenklhmcoeiolpjjb`. Releases fail with an explicit message when that key is missing. CI may override the update URL with `YTX_EXTENSION_UPDATE_URL` / `YTX_EXTENSION_CRX_URL`.
 
 ## Adobe bridge
 
-YTX Bridge 2.0 auto-repairs its CEP panel at startup, writes live port/token settings to the panel and per-user YTX folders, supports CEP 9–14, and exposes health and diagnostics endpoints on `127.0.0.1`. The panel reconnects automatically, times out stalled ExtendScript calls, reports import failures, and copies imported media into the project's managed `YTX Media` folder. Use **Repair Adobe bridge** in the app after installing or updating Adobe; restart the Adobe host, then open **Window → Extensions (Legacy) → YTX Bridge**.
+YTX Bridge 2.0 auto-repairs its CEP panel at startup, writes live port/token settings to the panel and per-user YTX folders, supports CEP 9–14, and exposes health and diagnostics endpoints on `127.0.0.1`. The panel reconnects automatically, times out stalled ExtendScript calls, reports import failures, and copies imported media into the project's managed `YTX Media` folder. Project media is scoped to the saved project, linked to its project file, and recorded in `.ytx-media.json` with import and insert timestamps so the panel can offer **Insert** or **Insert again** after a restart. Use **Repair Adobe bridge** in the app after installing or updating Adobe; restart the Adobe host, then open **Window → Extensions (Legacy) → YTX Bridge**.

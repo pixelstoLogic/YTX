@@ -222,14 +222,15 @@ $('downloadBtn').onclick = async () => {
   finally { $('downloadBtn').classList.remove('busy'); }
 };
 $('browseBtn').onclick = $('openBtn').onclick = async () => { const file = await window.studio.openMedia(); if (file) loadMedia(file); };
+let exporting = false;
 async function exportMedia(adobeTarget = '') {
   const status = $('exportStatus');
   if (!mediaPath && !remoteUrl) { status.textContent = 'Preview or open a video first.'; status.className = 'status error'; return; }
   const start = fullRange ? 0 : inPoint, end = fullRange ? duration : outPoint;
   if (end <= start) { status.textContent = 'Set a valid trim range.'; status.className = 'status error'; return; }
-  status.textContent = remoteUrl ? 'Preparing selected range download…' : 'Exporting with FFmpeg…';
+  status.textContent = remoteUrl ? 'Preparing the selected range…' : 'Rendering the selected range…';
   status.className = 'status'; $('exportBtn').classList.add('busy');
-  $('sendPremiere').disabled = $('sendAfterEffects').disabled = true;
+  exporting = true; refreshAdobe();
   try {
     if (adobeTarget) {
       const bridge = await window.studio.getAdobeStatus();
@@ -250,7 +251,7 @@ async function exportMedia(adobeTarget = '') {
       status.textContent = 'Sent to ' + (adobeTarget === 'premiere' ? 'Premiere Pro' : 'After Effects') + ': ' + result.path + (imported.note ? ' · ' + imported.note : '');
     } else status.textContent = (remoteUrl ? 'Selected part downloaded' : 'Export complete') + ': ' + result.path;
   } catch (error) { status.textContent = error.message; status.className = 'status error'; }
-  finally { $('exportBtn').classList.remove('busy'); $('sendPremiere').disabled = $('sendAfterEffects').disabled = false; }
+  finally { $('exportBtn').classList.remove('busy'); exporting = false; refreshAdobe(); }
 }
 $('exportBtn').onclick = () => exportMedia();
 $('exportVideoTop').onclick = () => { chooseFormat('video'); exportMedia(); };
@@ -260,29 +261,555 @@ function showWorkspace(name) {
   $('converterWorkspace').classList.toggle('hidden', !converter);
   $('editorModeBtn').classList.toggle('active', !converter);
   $('converterModeBtn').classList.toggle('active', converter);
-  if (converter) renderConversionTransfers();
+  if (converter) { renderConversionQueue(); refreshConversionPerformance(); renderConversionTransfers(); }
 }
 $('editorModeBtn').onclick = $('backToEditorBtn').onclick = () => showWorkspace('editor');
 $('converterModeBtn').onclick = () => showWorkspace('converter');
 $('convertBatchBtn').onclick = () => showWorkspace('converter');
 $('openTransferCenterBtn').onclick = () => openDownloadCenter('transfers');
-async function startBatchConversion(options, statusNode, button) {
-  statusNode.textContent = 'Choose one or more source files, then choose an output folder…'; statusNode.className = 'status';
-  button.disabled = true;
-  try {
-    const result = await window.studio.convertBatch(options);
-    if (result.canceled) { statusNode.textContent = 'Conversion cancelled.'; return; }
-    if (result.error) throw Error(result.error);
-    statusNode.textContent = `Converted ${result.files.length} file(s).`;
-    renderConversionTransfers();
-  } catch (error) { statusNode.textContent = error.message; statusNode.className = 'status error'; }
-  finally { button.disabled = false; }
-}
-$('startConversionBtn').onclick = () => {
-  const kind = $('convertKind').value, codec = $('convertCodec').value;
-  const options = { kind, format: $('convertContainer').value, colorProfile: $('convertColor').value, videoCodec: kind === 'video' ? codec : $('videoCodec').value, audioCodec: kind === 'audio' ? codec : $('audioCodec').value, videoQuality: $('convertQuality').value, audioQuality: $('audioQuality').value };
-  startBatchConversion(options, $('converterStatus'), $('startConversionBtn'));
+
+/* Conversion workspace --------------------------------------------------- */
+const FORMAT_LABELS = {
+  mp4: 'MP4 · H.264', mov: 'MOV · QuickTime', mkv: 'MKV · Matroska', webm: 'WebM · VP9', avi: 'AVI', m4v: 'M4V', ts: 'MPEG-TS',
+  mp3: 'MP3 · Audio', m4a: 'M4A · AAC', wav: 'WAV · PCM', flac: 'FLAC · Lossless', ogg: 'OGG · Vorbis', opus: 'Opus · Audio',
+  jpg: 'JPG · Image', png: 'PNG · Image', webp: 'WebP · Image'
 };
+const VIDEO_TARGETS = ['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v', 'ts'];
+const AUDIO_TARGETS = ['mp3', 'm4a', 'wav', 'flac', 'ogg', 'opus'];
+const IMAGE_TARGETS = ['jpg', 'png', 'webp'];
+const COMPRESSION_COPY = {
+  light: 'Light compression keeps near-original detail and trims only the largest files.',
+  balanced: 'Balanced reduces size while preserving visual quality for most projects.',
+  maximum: 'Maximum compression creates the smallest delivery files and caps video at 720p.'
+};
+const conversionQueue = [];
+let conversionMode = 'convert';
+let compressionPreset = 'balanced';
+let outputFolder = '';
+let conversionRunning = false;
+let conversionSequence = 0;
+let performanceProfile = null;
+
+function formatBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value >= 1073741824) return `${(value / 1073741824).toFixed(2)} GB`;
+  if (value >= 1048576) return `${(value / 1048576).toFixed(1)} MB`;
+  if (value >= 1024) return `${Math.round(value / 1024)} KB`;
+  return `${value} B`;
+}
+function formatDuration(seconds) {
+  const value = Number(seconds) || 0;
+  const minutes = Math.floor(value / 60), rest = Math.round(value % 60);
+  return `${minutes}:${String(rest).padStart(2, '0')}`;
+}
+function targetFormats(kind) {
+  if (kind === 'video') return [...VIDEO_TARGETS, ...AUDIO_TARGETS];
+  if (kind === 'audio') return [...AUDIO_TARGETS];
+  return [...IMAGE_TARGETS];
+}
+function defaultTarget(item) {
+  const source = String(item.extension || '').toLowerCase();
+  if (conversionMode === 'compress') {
+    // Compression keeps an already efficient container, but lossless or
+    // delivery-unfriendly sources move to a smaller format automatically.
+    if (item.kind === 'video') return ['mp4', 'mov', 'mkv', 'webm'].includes(source) ? source : 'mp4';
+    if (item.kind === 'audio') return ['mp3', 'm4a', 'ogg', 'opus'].includes(source) ? source : 'mp3';
+    return ['jpg', 'jpeg', 'webp'].includes(source) ? (source === 'jpeg' ? 'jpg' : source) : 'jpg';
+  }
+  return item.kind === 'video' ? 'mp4' : item.kind === 'audio' ? 'mp3' : 'jpg';
+}
+function formatLabel(value) { return FORMAT_LABELS[value] || value.toUpperCase(); }
+function mediaKindLabel(kind) { return kind === 'video' ? 'VIDEO' : kind === 'audio' ? 'AUDIO' : 'IMAGE'; }
+function compactPath(value) {
+  const path = String(value || '');
+  if (path.length <= 48) return path;
+  return `${path.slice(0, 20)}…${path.slice(-25)}`;
+}
+function queueItem(id) { return conversionQueue.find(item => item.id === id); }
+
+function buildFormatSelect(item) {
+  const select = document.createElement('select');
+  select.setAttribute('aria-label', `Output format for ${item.name}`);
+  const groups = item.kind === 'video'
+    ? [['Video output', VIDEO_TARGETS], ['Audio only', AUDIO_TARGETS]]
+    : item.kind === 'audio'
+      ? [['Audio output', AUDIO_TARGETS]]
+      : [['Image output', IMAGE_TARGETS]];
+  for (const [label, values] of groups) {
+    const group = document.createElement('optgroup');
+    group.label = label;
+    for (const value of values) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = formatLabel(value);
+      group.appendChild(option);
+    }
+    select.appendChild(group);
+  }
+  select.value = item.format;
+  select.disabled = conversionRunning;
+  select.addEventListener('change', () => { item.format = select.value; updateQueueSummary(); });
+  return select;
+}
+
+function queueStatusText(item) {
+  if (item.status === 'converting') return `Converting · ${Math.round(item.progress || 0)}%`;
+  if (item.status === 'complete') return 'Complete';
+  if (item.status === 'failed') return item.error ? String(item.error).split('\n')[0].slice(0, 90) : 'Could not convert this file.';
+  if (item.status === 'cancelled') return 'Cancelled';
+  return 'Ready to convert';
+}
+
+function updateQueueRow(item) {
+  const row = document.querySelector(`.queue-row[data-id="${item.id}"]`);
+  if (!row) return;
+  row.classList.toggle('converting', item.status === 'converting');
+  row.classList.toggle('complete', item.status === 'complete');
+  row.classList.toggle('failed', item.status === 'failed' || item.status === 'cancelled');
+  const status = row.querySelector('.queue-status-line');
+  if (status) {
+    status.replaceChildren();
+    const dot = document.createElement('span'); dot.className = 'dot';
+    const text = document.createElement('span'); text.textContent = queueStatusText(item);
+    status.append(dot, text);
+  }
+  const fill = row.querySelector('.queue-track i');
+  if (fill) fill.style.width = `${Math.max(0, Math.min(100, item.progress || 0))}%`;
+  const overlay = row.querySelector('.thumb-state');
+  if (overlay) {
+    overlay.classList.toggle('hidden', item.status !== 'converting' && item.status !== 'queued');
+    if (item.status === 'complete') {
+      overlay.classList.add('hidden');
+      const thumb = row.querySelector('.queue-thumb');
+      if (thumb && !thumb.querySelector('.thumb-complete')) {
+        const badge = document.createElement('span');
+        badge.className = 'thumb-complete';
+        badge.textContent = '✓';
+        badge.style.cssText = 'position:absolute;right:4px;top:4px;width:16px;height:16px;border-radius:50%;display:grid;place-items:center;background:#b9e95b;color:#171a0d;font-size:10px;font-weight:700;box-shadow:0 2px 8px #0008';
+        thumb.appendChild(badge);
+      }
+    }
+  }
+  const remove = row.querySelector('.queue-remove');
+  if (remove) remove.disabled = conversionRunning;
+}
+
+function createQueueRow(item) {
+  const row = document.createElement('article');
+  row.className = 'queue-row';
+  row.dataset.id = item.id;
+  if (item.status === 'converting') row.classList.add('converting');
+  if (item.status === 'complete') row.classList.add('complete');
+  if (item.status === 'failed' || item.status === 'cancelled') row.classList.add('failed');
+
+  const thumb = document.createElement('div');
+  thumb.className = `queue-thumb ${item.kind}`;
+  if (item.thumbnail) {
+    const image = document.createElement('img');
+    image.alt = '';
+    image.src = item.thumbnail;
+    thumb.appendChild(image);
+  } else {
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    icon.setAttribute('viewBox', '0 0 24 24');
+    icon.setAttribute('class', 'thumb-icon');
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', item.kind === 'audio'
+      ? 'M9 18V6l10-2v12M9 18a3 3 0 1 1-3-3h3m10-2a3 3 0 1 1-3-3h3'
+      : item.kind === 'image'
+        ? 'M4 5h16v14H4zM8 11l3 3 2.5-2.5L18 16M8.5 9h.01'
+        : 'M4 6h16v12H4zM10 9.5l5 2.5-5 2.5z');
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', 'currentColor');
+    path.setAttribute('stroke-width', '1.6');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('stroke-linejoin', 'round');
+    icon.appendChild(path);
+    thumb.appendChild(icon);
+  }
+  const kind = document.createElement('span');
+  kind.className = 'queue-kind';
+  kind.textContent = mediaKindLabel(item.kind);
+  thumb.appendChild(kind);
+  if (item.status === 'converting' || item.status === 'queued') {
+    const overlay = document.createElement('div');
+    overlay.className = `thumb-state${item.status === 'queued' ? ' hidden' : ''}`;
+    const spinner = document.createElement('div');
+    spinner.className = 'spinner';
+    overlay.appendChild(spinner);
+    thumb.appendChild(overlay);
+  }
+
+  const body = document.createElement('div');
+  body.className = 'queue-body';
+  const name = document.createElement('strong');
+  name.className = 'queue-name';
+  name.textContent = item.name;
+  name.title = item.path;
+  const meta = document.createElement('div');
+  meta.className = 'queue-meta';
+  const size = document.createElement('span'); size.textContent = formatBytes(item.size);
+  meta.appendChild(size);
+  if (item.duration) {
+    const duration = document.createElement('span'); duration.textContent = formatDuration(item.duration); meta.appendChild(duration);
+  }
+  const source = document.createElement('span'); source.textContent = String(item.extension || '').toUpperCase() || 'MEDIA'; meta.appendChild(source);
+  const statusLine = document.createElement('div');
+  statusLine.className = 'queue-status-line';
+  const dot = document.createElement('span'); dot.className = 'dot';
+  const statusText = document.createElement('span'); statusText.textContent = queueStatusText(item);
+  statusLine.append(dot, statusText);
+  const track = document.createElement('div');
+  track.className = 'queue-track';
+  const fill = document.createElement('i'); fill.style.width = `${Math.max(0, Math.min(100, item.progress || 0))}%`;
+  track.appendChild(fill);
+  body.append(name, meta, statusLine, track);
+
+  const format = document.createElement('div');
+  format.className = 'queue-format';
+  const label = document.createElement('label'); label.textContent = 'OUTPUT';
+  format.append(label, buildFormatSelect(item));
+
+  const remove = document.createElement('button');
+  remove.className = 'queue-remove';
+  remove.type = 'button';
+  remove.textContent = '×';
+  remove.title = 'Remove from queue';
+  remove.disabled = conversionRunning;
+  remove.addEventListener('click', () => {
+    if (conversionRunning) return;
+    const index = conversionQueue.findIndex(entry => entry.id === item.id);
+    if (index >= 0) conversionQueue.splice(index, 1);
+    renderConversionQueue();
+  });
+
+  row.append(thumb, body, format, remove);
+  return row;
+}
+
+function updateQueueSummary() {
+  const count = conversionQueue.length;
+  const total = conversionQueue.reduce((sum, item) => sum + (Number(item.size) || 0), 0);
+  $('convertQueueCount').textContent = `${count} ${count === 1 ? 'FILE' : 'FILES'}`;
+  const formatCount = new Set(conversionQueue.map(item => item.format)).size;
+  $('convertQueueSummary').textContent = count ? `${formatBytes(total)} queued · ${formatCount} output format${formatCount === 1 ? '' : 's'}` : 'No media added';
+  $('clearConversionQueue').disabled = !count || conversionRunning;
+  $('startConversionBtn').disabled = !count || conversionRunning;
+  $('startConversionBtn').textContent = conversionRunning ? 'Converting…' : 'Start conversion';
+}
+
+function renderConversionQueue() {
+  const root = $('conversionQueue');
+  root.replaceChildren();
+  if (!conversionQueue.length) {
+    const empty = document.createElement('div');
+    empty.className = 'queue-empty';
+    const mark = document.createElement('span'); mark.className = 'queue-empty-mark'; mark.textContent = '▧';
+    const strong = document.createElement('strong'); strong.textContent = 'Your media appears here';
+    const small = document.createElement('small'); small.textContent = 'Add files to preview them before conversion.';
+    empty.append(mark, strong, small);
+    root.appendChild(empty);
+    updateQueueSummary();
+    return;
+  }
+  for (const item of conversionQueue) root.appendChild(createQueueRow(item));
+  updateQueueSummary();
+}
+
+function updateQueueThumbnail(item) {
+  const row = document.querySelector(`.queue-row[data-id="${item.id}"]`);
+  if (!row || !item.thumbnail) return;
+  const thumb = row.querySelector('.queue-thumb');
+  if (!thumb) return;
+  const image = document.createElement('img');
+  image.alt = '';
+  image.src = item.thumbnail;
+  const icon = thumb.querySelector('.thumb-icon');
+  if (icon) icon.remove();
+  thumb.insertBefore(image, thumb.firstChild);
+}
+
+function probeQueueItem(item) {
+  if (!item.url || item.kind === 'image') return;
+  const node = document.createElement(item.kind === 'audio' ? 'audio' : 'video');
+  node.preload = 'metadata';
+  node.muted = true;
+  node.src = item.url;
+  let settled = false;
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    if (Number.isFinite(node.duration) && node.duration > 0) {
+      item.duration = node.duration;
+      const row = document.querySelector(`.queue-row[data-id="${item.id}"] .queue-meta`);
+      if (row && !row.querySelector('.queue-duration')) {
+        const span = document.createElement('span');
+        span.className = 'queue-duration';
+        span.textContent = formatDuration(item.duration);
+        row.insertBefore(span, row.children[1] || null);
+      }
+    }
+    try { node.removeAttribute('src'); node.load(); } catch {}
+  };
+  node.addEventListener('loadedmetadata', finish);
+  node.addEventListener('error', finish);
+  setTimeout(finish, 8000);
+}
+function captureVideoThumbnail(item) {
+  if (item.kind !== 'video' || !item.url || item.thumbnail) return;
+  const node = document.createElement('video');
+  node.preload = 'metadata';
+  node.muted = true;
+  node.src = item.url;
+  let drawn = false;
+  const draw = () => {
+    if (drawn) return;
+    drawn = true;
+    try {
+      const canvas = document.createElement('canvas');
+      const width = node.videoWidth || 320, height = node.videoHeight || 180;
+      canvas.width = 240;
+      canvas.height = Math.max(1, Math.round(240 * height / width));
+      const context = canvas.getContext('2d');
+      context.drawImage(node, 0, 0, canvas.width, canvas.height);
+      item.thumbnail = canvas.toDataURL('image/jpeg', 0.72);
+      updateQueueThumbnail(item);
+    } catch {}
+    try { node.removeAttribute('src'); node.load(); } catch {}
+  };
+  node.addEventListener('loadeddata', () => {
+    try { node.currentTime = Math.min(1.2, Math.max(0.05, (node.duration || 2) * 0.12)); } catch { draw(); }
+  });
+  node.addEventListener('seeked', draw);
+  node.addEventListener('error', () => { try { node.removeAttribute('src'); node.load(); } catch {} });
+}
+
+async function addConversionFiles(paths) {
+  const unique = [...new Set((Array.isArray(paths) ? paths : []).filter(Boolean))];
+  if (!unique.length) return;
+  const available = unique.filter(path => !conversionQueue.some(item => item.path.toLowerCase() === path.toLowerCase()));
+  if (!available.length) { $('converterStatus').textContent = 'Those files are already in the queue.'; $('converterStatus').className = 'status'; return; }
+  try {
+    const result = await window.studio.describeMediaFiles(available);
+    if (result.error) throw Error(result.error);
+    for (const file of result.files || []) {
+      const item = { ...file, id: `q${++conversionSequence}`, format: '', status: 'queued', progress: 0, error: '' };
+      item.format = defaultTarget(item);
+      conversionQueue.push(item);
+      if (file.kind === 'image') item.thumbnail = file.url;
+      probeQueueItem(item);
+      captureVideoThumbnail(item);
+    }
+    renderConversionQueue();
+    if (result.files?.length) {
+      $('converterStatus').textContent = `${result.files.length} file${result.files.length === 1 ? '' : 's'} added. Review the output formats, then start the conversion.`;
+      $('converterStatus').className = 'status';
+    }
+  } catch (error) {
+    $('converterStatus').textContent = error.message;
+    $('converterStatus').className = 'status error';
+  }
+}
+
+async function addFilesFromPicker() {
+  const result = await window.studio.pickMediaFiles();
+  if (!result || result.canceled) return;
+  await addConversionFiles((result.files || []).map(file => file.path));
+}
+$('addFilesBtn').onclick = event => { event.stopPropagation(); addFilesFromPicker(); };
+$('converterDropzone').addEventListener('click', event => {
+  if (event.target.closest('button')) return;
+  addFilesFromPicker();
+});
+$('converterDropzone').addEventListener('keydown', event => {
+  if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); addFilesFromPicker(); }
+});
+$('convertFileInput').addEventListener('change', async event => {
+  const paths = [...event.target.files].map(file => window.studio.pathForFile(file)).filter(Boolean);
+  event.target.value = '';
+  await addConversionFiles(paths);
+});
+for (const eventName of ['dragenter', 'dragover']) {
+  $('converterDropzone').addEventListener(eventName, event => {
+    event.preventDefault(); event.stopPropagation();
+    $('converterDropzone').classList.add('drag-over');
+  });
+}
+$('converterDropzone').addEventListener('dragleave', event => {
+  if (!$('converterDropzone').contains(event.relatedTarget)) $('converterDropzone').classList.remove('drag-over');
+});
+$('converterDropzone').addEventListener('drop', async event => {
+  event.preventDefault(); event.stopPropagation();
+  $('converterDropzone').classList.remove('drag-over');
+  const paths = [...(event.dataTransfer?.files || [])].map(file => window.studio.pathForFile(file)).filter(Boolean);
+  await addConversionFiles(paths);
+});
+document.addEventListener('dragover', event => { if (!$('converterWorkspace').classList.contains('hidden')) event.preventDefault(); });
+document.addEventListener('drop', event => { if (!$('converterWorkspace').classList.contains('hidden')) event.preventDefault(); });
+
+function setConversionRunning(running) {
+  conversionRunning = running;
+  $('startConversionBtn').classList.toggle('busy', running);
+  $('cancelConversionBtn').classList.toggle('hidden', !running);
+  $('convertModeBtn').disabled = running;
+  $('compressModeBtn').disabled = running;
+  $('chooseOutputFolderBtn').disabled = running;
+  for (const button of document.querySelectorAll('.compression-option')) button.disabled = running;
+  for (const row of document.querySelectorAll('.queue-row')) {
+    const remove = row.querySelector('.queue-remove');
+    const select = row.querySelector('select');
+    if (remove) remove.disabled = running;
+    if (select) select.disabled = running;
+  }
+  updateQueueSummary();
+}
+function applyMode(mode) {
+  if (conversionRunning) return;
+  conversionMode = mode === 'compress' ? 'compress' : 'convert';
+  $('convertModeBtn').classList.toggle('active', conversionMode === 'convert');
+  $('compressModeBtn').classList.toggle('active', conversionMode === 'compress');
+  $('compressionSection').classList.toggle('hidden', conversionMode !== 'compress');
+  $('converterModeCopy').textContent = conversionMode === 'compress'
+    ? 'Reduce file size with a tuned preset. Video is rescaled and re-encoded for efficient delivery.'
+    : 'Change containers and codecs while keeping the original image and sound.';
+  for (const item of conversionQueue) { item.format = defaultTarget(item); }
+  renderConversionQueue();
+}
+$('convertModeBtn').onclick = () => applyMode('convert');
+$('compressModeBtn').onclick = () => applyMode('compress');
+for (const button of document.querySelectorAll('.compression-option')) {
+  button.addEventListener('click', () => {
+    if (conversionRunning) return;
+    compressionPreset = button.dataset.compression;
+    for (const option of document.querySelectorAll('.compression-option')) option.classList.toggle('active', option === button);
+    $('compressionHint').textContent = COMPRESSION_COPY[compressionPreset] || '';
+  });
+}
+$('clearConversionQueue').onclick = () => {
+  if (conversionRunning) return;
+  conversionQueue.length = 0;
+  renderConversionQueue();
+  $('converterStatus').textContent = 'Add media to begin.';
+  $('converterStatus').className = 'status';
+};
+function setOutputFolder(path) {
+  outputFolder = path || '';
+  $('outputFolderPath').textContent = outputFolder ? compactPath(outputFolder) : 'Choose a destination folder';
+  $('outputFolderPath').title = outputFolder;
+}
+$('chooseOutputFolderBtn').onclick = async () => {
+  if (conversionRunning) return;
+  const result = await window.studio.chooseOutputFolder();
+  if (result && !result.canceled && result.path) setOutputFolder(result.path);
+};
+async function refreshConversionPerformance() {
+  try {
+    const profile = await window.studio.getPerformanceProfile();
+    if (!profile || profile.error) return;
+    performanceProfile = profile;
+    $('performanceChip').querySelector('span').textContent = `${profile.label} · ${profile.cores} cores · ${profile.totalMemoryGb} GB RAM · ${profile.workers} file${profile.workers === 1 ? '' : 's'} at a time`;
+    $('performanceLabel').textContent = `Automatic performance · ${profile.label}`;
+    $('performanceDetail').textContent = `${profile.workers} parallel job${profile.workers === 1 ? '' : 's'} · ${profile.threads} encoding thread${profile.threads === 1 ? '' : 's'} each · ${profile.freeMemoryGb} GB free`;
+    if (['light', 'balanced', 'maximum'].includes(profile.recommendedCompression) && compressionPreset === 'balanced') {
+      compressionPreset = profile.recommendedCompression;
+      for (const option of document.querySelectorAll('.compression-option')) option.classList.toggle('active', option.dataset.compression === compressionPreset);
+      $('compressionHint').textContent = COMPRESSION_COPY[compressionPreset] || '';
+    }
+  } catch {}
+}
+function applyConversionResult(result) {
+  const outputs = new Map((result.files || []).filter(file => file.path).map(file => [file.source, file.path]));
+  for (const item of conversionQueue) {
+    const output = outputs.get(item.path);
+    if (result.canceled || item.status === 'cancelled') { item.status = 'cancelled'; continue; }
+    if (output) {
+      item.status = 'complete'; item.progress = 100; item.error = ''; item.output = output;
+    } else if (item.status === 'converting') {
+      item.status = 'failed'; item.error = result.error || 'The encoder did not finish this file.';
+    }
+  }
+  for (const item of conversionQueue) updateQueueRow(item);
+  renderConversionTransfers();
+}
+async function startConversion() {
+  if (conversionRunning) return;
+  if (!conversionQueue.length) {
+    $('converterStatus').textContent = 'Add at least one media file to the queue.';
+    $('converterStatus').className = 'status error';
+    return;
+  }
+  if (!outputFolder) {
+    try { const fallback = await window.studio.defaultOutput(); setOutputFolder(fallback.path); } catch {}
+  }
+  if (!outputFolder) {
+    $('converterStatus').textContent = 'Choose an output folder before starting.';
+    $('converterStatus').className = 'status error';
+    return;
+  }
+  for (const item of conversionQueue) { item.status = 'queued'; item.progress = 0; item.error = ''; delete item.output; }
+  renderConversionQueue();
+  setConversionRunning(true);
+  $('converterStatus').textContent = `Preparing ${conversionQueue.length} file${conversionQueue.length === 1 ? '' : 's'}…`;
+  $('converterStatus').className = 'status';
+  try {
+    const result = await window.studio.convertMedia({
+      files: conversionQueue.map(item => ({ path: item.path, format: item.format })),
+      outputDir: outputFolder,
+      mode: conversionMode,
+      compression: compressionPreset,
+      videoCodec: $('convertCodec').value || '',
+      colorProfile: $('convertColor').value,
+      videoQuality: $('convertQuality').value,
+      audioQuality: $('convertAudioQuality').value
+    });
+    if (result.error && !result.canceled) throw Error(result.error);
+    applyConversionResult(result);
+    const completed = conversionQueue.filter(item => item.status === 'complete').length;
+    if (result.canceled) {
+      $('converterStatus').textContent = 'Conversion cancelled. Files that already finished were kept.';
+      $('converterStatus').className = 'status';
+    } else {
+      $('converterStatus').textContent = `Finished ${completed} of ${conversionQueue.length} file${conversionQueue.length === 1 ? '' : 's'} in ${outputFolder}.`;
+      $('converterStatus').className = 'status';
+    }
+  } catch (error) {
+    $('converterStatus').textContent = error.message;
+    $('converterStatus').className = 'status error';
+  } finally {
+    setConversionRunning(false);
+    renderConversionQueue();
+  }
+}
+$('startConversionBtn').onclick = startConversion;
+$('cancelConversionBtn').onclick = async () => {
+  if (!conversionRunning) return;
+  $('converterStatus').textContent = 'Cancelling the remaining files…';
+  $('converterStatus').className = 'status';
+  try { await window.studio.cancelConvert(); } catch (error) { $('converterStatus').textContent = error.message; $('converterStatus').className = 'status error'; }
+};
+function handleConversionProgress(task) {
+  if (!task || task.type !== 'convert') return;
+  if (Array.isArray(task.fileProgress)) {
+    for (const update of task.fileProgress) {
+      const item = conversionQueue.find(entry => entry.path === update.source);
+      if (!item) continue;
+      item.status = update.status || item.status;
+      item.progress = Number(update.progress) || 0;
+      item.error = update.error || '';
+      updateQueueRow(item);
+    }
+  }
+  if (!task.done && task.message) {
+    $('converterStatus').textContent = `${task.message} · ${Math.round(task.progress || 0)}%`;
+    $('converterStatus').className = 'status';
+  }
+}
+async function initializeConversionWorkspace() {
+  try { const result = await window.studio.defaultOutput(); if (result?.path) setOutputFolder(result.path); } catch {}
+  refreshConversionPerformance();
+}
+initializeConversionWorkspace();
+
 $('sendPremiere').onclick = () => exportMedia('premiere');
 $('sendAfterEffects').onclick = () => exportMedia('aftereffects');
 paint();
@@ -306,7 +833,7 @@ function renderTransfers() {
     const icon = document.createElement('div'); icon.className = 'transfer-icon'; icon.textContent = item.type === 'update' ? '↻' : item.type === 'convert' ? '⇄' : '↓';
     const copy = document.createElement('div'); copy.className = 'transfer-copy';
     const title = document.createElement('strong'); title.textContent = item.title || (item.type === 'update' ? 'App update' : item.type === 'convert' ? 'Batch conversion' : 'Video download');
-    const detail = document.createElement('small'); detail.textContent = item.error ? item.error : item.state === 'active' ? (item.message || 'Working…') : item.state === 'complete' ? (item.paths?.length ? item.paths.map(p => p.split(/[\\/]/).pop()).join(', ') : 'Completed') : 'Failed';
+    const detail = document.createElement('small'); detail.textContent = item.state === 'cancelled' ? 'Stopped by request' : item.error ? item.error : item.state === 'active' ? (item.message || 'Working…') : item.state === 'complete' ? (item.paths?.length ? item.paths.map(p => p.split(/[\\/]/).pop()).join(', ') : 'Completed') : 'Failed';
     copy.append(title, detail);
     if (item.state === 'active') { const track = document.createElement('div'); track.className = 'transfer-track'; const fill = document.createElement('i'); fill.style.width = `${Math.max(3, item.progress || 0)}%`; track.appendChild(fill); copy.appendChild(track); }
     const action = item.state === 'active' ? document.createElement('span') : document.createElement('button');
@@ -322,13 +849,14 @@ function renderConversionTransfers() {
   root.replaceChildren();
   if (!items.length) { const empty = document.createElement('div'); empty.className = 'center-empty'; empty.textContent = 'Your conversions and progress will appear here.'; root.appendChild(empty); return; }
   for (const item of items) {
-    const row = document.createElement('article'); row.className = 'conversion-row';
+    const row = document.createElement('article');
+    row.className = 'conversion-row' + (item.state === 'cancelled' ? ' cancelled' : item.state === 'failed' ? ' failed' : '');
     const head = document.createElement('div'); head.className = 'conversion-row-head';
-    const title = document.createElement('strong'); title.textContent = item.state === 'active' ? (item.message || 'Converting files…') : item.state === 'complete' ? 'Conversion complete' : 'Conversion failed';
+    const title = document.createElement('strong'); title.textContent = item.state === 'active' ? (item.message || 'Converting files…') : item.state === 'complete' ? 'Conversion complete' : item.state === 'cancelled' ? 'Conversion cancelled' : 'Conversion failed';
     const percent = document.createElement('b'); percent.textContent = item.state === 'complete' ? '100%' : `${Math.round(item.progress || 0)}%`;
     head.append(title, percent); row.appendChild(head);
     const track = document.createElement('div'); track.className = 'conversion-track'; const fill = document.createElement('i'); fill.style.width = `${Math.max(3, item.progress || 0)}%`; track.appendChild(fill); row.appendChild(track);
-    const detail = document.createElement('small'); detail.textContent = item.error || (item.paths?.length ? item.paths.map(p => p.split(/[\\/]/).pop()).join(', ') : item.state === 'active' ? (item.message || 'Preparing conversion…') : 'Finished'); row.appendChild(detail);
+    const detail = document.createElement('small'); detail.textContent = item.state === 'cancelled' ? 'Stopped by request. Finished files were kept.' : item.error || (item.paths?.length ? item.paths.map(p => p.split(/[\\/]/).pop()).join(', ') : item.state === 'active' ? (item.message || 'Preparing conversion…') : 'Finished'); row.appendChild(detail);
     root.appendChild(row);
   }
 }
@@ -338,18 +866,27 @@ function recordTransfer(task) {
   item.type = task.type || item.type; item.title = item.type === 'update' ? 'YTX update installer' : item.type === 'convert' ? 'Batch conversion' : item.type === 'import' ? 'Adobe import' : (task.message || item.title); item.message = task.message || item.message; item.progress = task.progress ?? item.progress;
   if (task.path) item.paths = [task.path];
   if (task.files?.length) item.paths = task.files.map(file => file.path).filter(Boolean);
-  if (task.done) { item.state = task.error ? 'failed' : 'complete'; item.error = task.error || ''; item.progress = task.error ? item.progress : 100; }
+  if (task.done) {
+    item.state = task.cancelled ? 'cancelled' : task.error ? 'failed' : 'complete';
+    item.error = task.cancelled ? '' : task.error || '';
+    item.progress = task.cancelled || task.error ? item.progress : 100;
+  }
   while (transferHistory.length > 30) transferHistory.pop();
   saveTransferHistory(); renderTransfers(); renderConversionTransfers();
 }
 renderTransfers();
 window.studio.onTaskProgress(task => {
+  handleConversionProgress(task);
   recordTransfer(task);
   $('taskProgress').classList.remove('hidden'); $('taskMessage').textContent = task.message || 'Working…';
   $('taskPercent').textContent = `${task.progress || 0}%`; $('taskBar').style.width = `${Math.max(3, task.progress || 0)}%`;
   const mb = n => `${(n / 1048576).toFixed(1)} MB`;
   $('taskMeta').textContent = task.total ? `${mb(task.downloaded || 0)} / ${mb(task.total)}${task.speed ? ` · ${(task.speed / 1048576).toFixed(1)} MB/s` : ''}${task.eta ? ` · ${task.eta}s left` : ''}` : (task.done ? 'Complete' : 'Connecting to stream…');
-  if (task.done) { $('taskMessage').textContent = task.error ? 'Task failed' : 'Task complete'; if (task.error) $('taskMeta').textContent = task.error; }
+  if (task.done) {
+    $('taskMessage').textContent = task.cancelled ? 'Task cancelled' : task.error ? 'Task failed' : 'Task complete';
+    if (task.cancelled) $('taskMeta').textContent = 'Stopped by request';
+    else if (task.error) $('taskMeta').textContent = task.error;
+  }
   if (task.type === 'update') {
     const progress = $('updateDownloadProgress');
     progress.hidden = false;
@@ -442,13 +979,26 @@ $('openReleaseBtn').onclick = () => releaseInfo?.url && window.studio.openReleas
 window.studio.getChangelog().then(text => { $('changelogText').textContent = text; }).catch(() => { $('changelogText').textContent = 'Changelog is unavailable.'; });
 checkReleaseUpdate();
 window.studio.onAdobeHandoff(file => { loadMedia(file); $('downloadStatus').textContent = 'Received selected Adobe media from ' + (file.source || 'Adobe') + '.'; });
+function updateAdobeButton(buttonId, host, label) {
+  const button = $(buttonId);
+  const connected = Boolean(host && host.connected);
+  button.disabled = !connected || exporting;
+  button.classList.toggle('unavailable', !connected);
+  button.title = connected
+    ? `Export and import into the open ${label} project`
+    : `Open ${label} and the YTX Bridge panel to enable this action`;
+}
 async function refreshAdobe() {
   try {
     const state = await window.studio.getAdobeStatus();
-    $('premiereState').classList.toggle('connected-dot', state.premiere.connected); $('premiereLabel').textContent = state.premiere.connected ? 'Connected' : (state.premiere.running ? 'Active · open YTX Bridge' : 'Not running');
-    $('aeState').classList.toggle('connected-dot', state.aftereffects.connected); $('aeLabel').textContent = state.aftereffects.connected ? 'Connected' : (state.aftereffects.running ? 'Active · open YTX Bridge' : 'Not running');
-    $('sendPremiere').disabled = $('sendAfterEffects').disabled = false;
-  } catch {}
+    $('premiereState').classList.toggle('connected-dot', state.premiere.connected); $('premiereLabel').textContent = state.premiere.connected ? 'Connected' : (state.premiere.running ? 'Open YTX Bridge' : 'Not running');
+    $('aeState').classList.toggle('connected-dot', state.aftereffects.connected); $('aeLabel').textContent = state.aftereffects.connected ? 'Connected' : (state.aftereffects.running ? 'Open YTX Bridge' : 'Not running');
+    updateAdobeButton('sendPremiere', state.premiere, 'Premiere Pro');
+    updateAdobeButton('sendAfterEffects', state.aftereffects, 'After Effects');
+  } catch {
+    updateAdobeButton('sendPremiere', { connected: false }, 'Premiere Pro');
+    updateAdobeButton('sendAfterEffects', { connected: false }, 'After Effects');
+  }
 }
 setInterval(refreshAdobe, 1500); refreshAdobe();
 
@@ -475,13 +1025,13 @@ $('startupToggle').addEventListener('change', async () => {
 });
 $('installBrowserExtensionBtn').onclick = async () => {
   $('installBrowserExtensionBtn').disabled = true;
-  $('systemSummary').textContent = 'Registering the signed YTX extension in detected Chromium browsers…';
+  $('systemSummary').textContent = 'Authorizing the YTX browser integration…';
   try {
     const result = await window.studio.installBrowserExtension({});
     if (result.error) throw Error(result.error);
-    $('systemSummary').textContent = result.message || (result.ok ? 'Browser extension registered. Restart the browser once.' : 'No supported browser was found.');
-    if (!result.ok && result.path) $('systemSummary').textContent += ' Extension folder: ' + result.path;
-  } catch (error) { $('systemSummary').textContent = `Automatic install failed: ${error.message}`; }
+    $('systemSummary').textContent = result.message || (result.ok ? 'Browser integration authorized. Restart the browser once.' : 'No supported browser was found.');
+    if (!result.ok && result.path) $('systemSummary').textContent += ' Integration folder: ' + result.path;
+  } catch (error) { $('systemSummary').textContent = `Browser authorization failed: ${error.message}`; }
   finally { $('installBrowserExtensionBtn').disabled = false; }
 };
 $('repairAdobeBridgeBtn').onclick = async () => {

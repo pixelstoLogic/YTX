@@ -13,6 +13,14 @@ const { createIntegrationManager } = require('./integrations');
 const GITHUB_REPOSITORY = 'pixelstoLogic/YTX';
 const GITHUB_API = `https://api.github.com/repos/${GITHUB_REPOSITORY}`;
 const GITHUB_RELEASES = `https://github.com/${GITHUB_REPOSITORY}/releases`;
+const MEDIA_EXTENSIONS = {
+  video: ['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v', 'ts', 'mts', 'm2ts', 'wmv', 'flv', '3gp', 'ogv'],
+  audio: ['mp3', 'm4a', 'wav', 'flac', 'ogg', 'opus', 'aac', 'wma', 'aiff', 'aif'],
+  image: ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'tif', 'tiff', 'gif']
+};
+const MEDIA_FILTER_EXTENSIONS = [...new Set(Object.values(MEDIA_EXTENSIONS).flat())];
+
+let activeConversion = null;
 
 let backendProcess = null;
 let backendPort = null;
@@ -133,20 +141,108 @@ ipcMain.handle('media:export', async (_event, opts) => {
   if (result.canceled) return { canceled: true };
   return backendRequest('POST', '/export', { source: opts.input, target: result.filePath, start: opts.start, end: opts.end, kind: opts.audio ? 'audio' : 'video', videoQuality: opts.videoQuality, audioQuality: opts.audioQuality, videoCodec: opts.videoCodec, audioCodec: opts.audioCodec, colorProfile: opts.colorProfile });
 });
-ipcMain.handle('media:convert-batch', async (_event, options) => {
-  const files = await dialog.showOpenDialog({ title: 'Choose files to convert', properties: ['openFile', 'multiSelections'], filters: [{ name: 'Media files', extensions: ['mp4','mov','mkv','webm','avi','m4v','ts','mp3','m4a','wav','flac','ogg','opus'] }] });
-  if (files.canceled || !files.filePaths.length) return { canceled: true };
-  const folder = await dialog.showOpenDialog({ title: 'Choose output folder', properties: ['openDirectory', 'createDirectory'] });
-  if (folder.canceled || !folder.filePaths.length) return { canceled: true };
-  const started = await backendRequest('POST', '/convert/start', { ...options, files: files.filePaths, outputDir: folder.filePaths[0] });
+ipcMain.handle('media:pick-files', async () => {
+  const result = await dialog.showOpenDialog({
+    title: 'Add media to the conversion queue',
+    properties: ['openFile', 'multiSelections'],
+    filters: [{ name: 'Video, audio, and image media', extensions: MEDIA_FILTER_EXTENSIONS }]
+  });
+  if (result.canceled) return { canceled: true, files: [] };
+  return { files: result.filePaths.map(describeMediaFile).filter(Boolean) };
+});
+ipcMain.handle('media:describe-files', async (_event, filePaths) => {
+  const files = Array.isArray(filePaths) ? filePaths.slice(0, 200) : [];
+  return { files: files.map(describeMediaFile).filter(Boolean) };
+});
+ipcMain.handle('media:choose-output-folder', async () => {
+  const result = await dialog.showOpenDialog({
+    title: 'Choose a destination folder',
+    defaultPath: path.join(app.getPath('downloads'), 'YTX Exports'),
+    properties: ['openDirectory', 'createDirectory']
+  });
+  if (result.canceled || !result.filePaths.length) return { canceled: true };
+  return { path: result.filePaths[0] };
+});
+ipcMain.handle('media:default-output', async () => {
+  const folder = path.join(app.getPath('downloads'), 'YTX Exports');
+  fs.mkdirSync(folder, { recursive: true });
+  return { path: folder };
+});
+ipcMain.handle('media:convert', async (_event, options) => {
+  const files = Array.isArray(options?.files) ? options.files : [];
+  if (!files.length) return { error: 'Add at least one media file to the queue.' };
+  const outputDir = options.outputDir || path.join(app.getPath('downloads'), 'YTX Exports');
+  fs.mkdirSync(outputDir, { recursive: true });
+  const profile = performanceProfile();
+  const payload = {
+    files: files.map(file => ({ path: file.path, format: file.format })),
+    outputDir,
+    mode: options.mode === 'compress' ? 'compress' : 'convert',
+    compression: options.mode === 'compress' ? (options.compression || profile.recommendedCompression) : '',
+    videoCodec: options.videoCodec || 'h264',
+    audioCodec: options.audioCodec || 'aac',
+    colorProfile: options.colorProfile || 'preserve',
+    videoQuality: options.videoQuality || 20,
+    audioQuality: options.audioQuality || 192,
+    workers: profile.workers,
+    threads: profile.threads
+  };
+  const started = await backendRequest('POST', '/convert/start', payload);
   if (started.error) return started;
+  activeConversion = { id: started.id, canceled: false, startedAt: Date.now() };
   for (;;) {
     await new Promise(resolve => setTimeout(resolve, 350));
     const job = await backendRequest('GET', `/jobs/${started.id}`);
-    if (job.error) return job;
-    sendTaskProgress({ id: started.id, type: 'convert', progress: job.percent || 0, message: job.message || 'Converting media…', currentFile: job.currentFile || 0, totalFiles: job.totalFiles || files.filePaths.length, done: Boolean(job.done), error: job.error || '', files: job.done ? (job.files || []) : [] });
-    if (job.done) return job.error ? { error: job.error, files: job.files || [] } : { files: job.files || [] };
+    if (job.error && !job.id) {
+      activeConversion = null;
+      return job;
+    }
+    const jobFiles = (job.files || []).map(file => ({
+      name: file.name,
+      source: file.source,
+      format: file.format,
+      kind: file.kind,
+      status: file.status,
+      progress: file.progress || 0,
+      error: file.error || '',
+      path: file.output || ''
+    }));
+    const done = Boolean(job.done);
+    sendTaskProgress({
+      id: started.id,
+      type: 'convert',
+      progress: job.percent || 0,
+      message: job.message || 'Converting media…',
+      workers: job.workers || profile.workers,
+      threads: job.threads || profile.threads,
+      currentFile: (job.files || []).findIndex(file => file.status === 'converting') + 1,
+      totalFiles: files.length,
+      fileProgress: jobFiles,
+      files: done ? (job.results || []).filter(file => file.path) : [],
+      done,
+      cancelled: job.status === 'cancelled',
+      error: job.error || '',
+      status: job.status || ''
+    });
+    if (done) {
+      activeConversion = null;
+      return {
+        id: started.id,
+        status: job.status,
+        canceled: job.status === 'cancelled',
+        files: job.results || [],
+        error: job.error || '',
+        workers: job.workers,
+        threads: job.threads
+      };
+    }
   }
+});
+ipcMain.handle('media:cancel-convert', async () => {
+  if (!activeConversion) return { error: 'No conversion is running.' };
+  const result = await backendRequest('POST', `/jobs/${activeConversion.id}/cancel`, {});
+  if (result.ok) activeConversion.canceled = true;
+  return result;
 });
 ipcMain.handle('media:download-section', async (_event, opts) => {
   const extension = opts.format || (opts.audio ? (opts.extension || 'mp3') : 'mp4');
@@ -222,6 +318,7 @@ ipcMain.handle('app:preferences', async (_event, next) => {
 });
 ipcMain.handle('app:get-preferences', () => preferences);
 ipcMain.handle('app:system-scan', async () => scanSystem());
+ipcMain.handle('app:performance', async () => performanceProfile());
 ipcMain.on('media:start-native-drag', (event, filePath) => {
   const resolved = path.resolve(String(filePath || ''));
   if (!fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) return;
@@ -253,12 +350,63 @@ function scanSystem() {
     { name: 'Mozilla Firefox', installed: firefox, kind: 'browser', automatic: false }
   ];
   const totalMemory = os.totalmem();
-  return { apps, adobe, browsers, cpu: os.cpus()[0]?.model || 'Unknown CPU', cores: os.cpus().length, memoryGb: +(totalMemory / 1073741824).toFixed(1), freeMemoryGb: +(os.freemem() / 1073741824).toFixed(1), arch: os.arch(), platform: os.platform(), sequentialConversion: true };
+  const profile = performanceProfile();
+  return { apps, adobe, browsers, cpu: os.cpus()[0]?.model || 'Unknown CPU', cores: os.cpus().length, memoryGb: +(totalMemory / 1073741824).toFixed(1), freeMemoryGb: +(os.freemem() / 1073741824).toFixed(1), arch: os.arch(), platform: os.platform(), sequentialConversion: profile.workers === 1, performance: profile };
 }
 
 function sendTaskProgress(task) {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('task:progress', task);
 }
+
+function mediaKindFor(filePath) {
+  const extension = path.extname(filePath).slice(1).toLowerCase();
+  for (const [kind, extensions] of Object.entries(MEDIA_EXTENSIONS)) {
+    if (extensions.includes(extension)) return kind;
+  }
+  return 'other';
+}
+
+function describeMediaFile(filePath) {
+  try {
+    const resolved = path.resolve(String(filePath || ''));
+    const stat = fs.statSync(resolved);
+    if (!stat.isFile()) return null;
+    const kind = mediaKindFor(resolved);
+    if (kind === 'other') return null;
+    return {
+      path: resolved,
+      name: path.basename(resolved),
+      extension: path.extname(resolved).slice(1).toLowerCase(),
+      size: stat.size,
+      modifiedAt: stat.mtimeMs,
+      kind,
+      url: pathToFileURL(resolved).href
+    };
+  } catch { return null; }
+}
+
+function performanceProfile() {
+  const cpus = os.cpus();
+  const cores = Array.isArray(cpus) ? cpus.length : 4;
+  const totalMemoryGb = +(os.totalmem() / 1073741824).toFixed(1);
+  const freeMemoryGb = +(os.freemem() / 1073741824).toFixed(1);
+  let workers = 1;
+  if (cores >= 12 && totalMemoryGb >= 16 && freeMemoryGb >= 6) workers = 3;
+  else if (cores >= 8 && totalMemoryGb >= 12 && freeMemoryGb >= 4) workers = 2;
+  if (freeMemoryGb < 2) workers = 1;
+  const threads = Math.max(2, Math.min(8, Math.floor(cores / Math.max(1, workers))));
+  return {
+    cpu: cpus?.[0]?.model || 'System processor',
+    cores,
+    totalMemoryGb,
+    freeMemoryGb,
+    workers,
+    threads,
+    label: workers >= 3 ? 'High throughput' : workers === 2 ? 'Balanced' : 'Low impact',
+    recommendedCompression: cores >= 8 && totalMemoryGb >= 12 ? 'balanced' : 'light'
+  };
+}
+
 
 function versionParts(value) { return String(value || '').replace(/^v/i, '').split(/[.+-]/).map(part => Number(part) || 0); }
 function compareVersions(a, b) {
@@ -442,7 +590,16 @@ async function ensureAdobeBridgeOnStartup() {
 
 function bridgeAppStatus(target) {
   const heartbeat = adobeHeartbeats.get(target);
-  return { connected: Boolean(heartbeat && Date.now() - heartbeat.at < 8000), app: heartbeat ? heartbeat.host : '', project: heartbeat ? heartbeat.project : '', projectPath: heartbeat ? heartbeat.projectPath : '', lastSeen: heartbeat ? heartbeat.at : 0, capabilities: heartbeat ? heartbeat.capabilities : [] };
+  return {
+    connected: Boolean(heartbeat && Date.now() - heartbeat.at < 8000),
+    app: heartbeat ? heartbeat.host : '',
+    project: heartbeat ? heartbeat.project : '',
+    projectName: heartbeat ? heartbeat.projectName : '',
+    projectPath: heartbeat ? heartbeat.projectPath : '',
+    projectFile: heartbeat ? heartbeat.projectFile : '',
+    lastSeen: heartbeat ? heartbeat.at : 0,
+    capabilities: heartbeat ? heartbeat.capabilities : []
+  };
 }
 
 function isProcessRunning(imageName) {
@@ -511,7 +668,9 @@ function startAdobeBridge() {
             at: Date.now(),
             host: String(body.host || target),
             project: String(body.project || ''),
+            projectName: String(body.projectName || body.project || ''),
             projectPath: String(body.projectPath || ''),
+            projectFile: String(body.projectFile || ''),
             capabilities: Array.isArray(body.capabilities) ? body.capabilities.map(String).slice(0, 20) : [],
             panelVersion: String(body.panelVersion || '')
           });
@@ -526,6 +685,17 @@ function startAdobeBridge() {
           const filePath = path.resolve(String(body.path || ''));
           if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return sendJson(res, { error: 'The selected Adobe media file could not be found.' }, 404);
           if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('adobe:handoff', { path: filePath, url: pathToFileURL(filePath).href, source: target });
+          return sendJson(res, { ok: true });
+        }
+        if (parsed.pathname === '/bridge/media-imported') {
+          const status = bridgeAppStatus(target);
+          const assetPath = path.resolve(String(body.path || ''));
+          const mediaRoot = status.projectPath ? path.resolve(status.projectPath, 'YTX Media') : '';
+          const relative = mediaRoot ? path.relative(mediaRoot, assetPath) : '';
+          if (!status.connected || !mediaRoot || !relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+            return sendJson(res, { error: 'The managed media path is not inside the active project.' }, 400);
+          }
+          markProjectAssetImported(assetPath, target);
           return sendJson(res, { ok: true });
         }
         return sendJson(res, { error: 'Not found.' }, 404);
@@ -557,7 +727,12 @@ async function queueAdobeImport(target, mediaPath) {
   if (!projectPath || !fs.existsSync(projectPath) || !fs.statSync(projectPath).isDirectory()) return { error: 'Save the Adobe project before importing. YTX stores managed media inside the project folder.' };
   const id = crypto.randomUUID();
   let managed;
-  try { managed = copyProjectAsset(source, projectPath, target, id); }
+  try {
+    managed = copyProjectAsset(source, projectPath, target, id, {
+      name: status.projectName || status.project || path.basename(projectPath),
+      file: status.projectFile || ''
+    });
+  }
   catch (error) { return { error: `Could not place media in the project folder: ${error.message}` }; }
   const request = { id, path: managed.path, sourcePath: source, operation: 'import-to-timeline', requestedAt: Date.now(), attempts: 0 };
   adobeCommands[target].push(request);
@@ -586,11 +761,42 @@ async function queueAdobeImport(target, mediaPath) {
     adobeWaiters.set(id, { resolve, timer });
   });
   clearInterval(keepAlive);
+  if (response.ok) markProjectAssetImported(managed.path, target);
   sendTaskProgress({ id, type: 'import', target, progress: 100, message: response.message || (response.ok ? 'Imported into timeline.' : 'Import failed.'), done: true, error: response.ok ? '' : response.message });
   return response.ok ? { ok: true, message: response.message, path: managed.path } : { error: response.message };
 }
 
-function copyProjectAsset(source, projectDir, target, requestId = crypto.randomUUID()) {
+function readProjectMetadata(projectDir) {
+  const folder = path.join(projectDir, 'YTX Media');
+  const metadataPath = path.join(folder, '.ytx-media.json');
+  try { return { folder, metadataPath, metadata: JSON.parse(fs.readFileSync(metadataPath, 'utf8').replace(/^\uFEFF/, '')) }; }
+  catch { return { folder, metadataPath, metadata: { version: 1, assets: [] } }; }
+}
+
+function writeProjectMetadata(projectDir, metadata) {
+  const { folder, metadataPath } = readProjectMetadata(projectDir);
+  fs.mkdirSync(folder, { recursive: true });
+  metadata.version = 1;
+  metadata.updatedAt = new Date().toISOString();
+  fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), 'utf8');
+  if (process.platform === 'win32') spawn('attrib.exe', ['+h', metadataPath], { windowsHide: true, stdio: 'ignore' });
+}
+
+function markProjectAssetImported(assetPath, target) {
+  try {
+    const folder = path.dirname(assetPath);
+    const projectDir = path.dirname(folder);
+    const { metadata } = readProjectMetadata(projectDir);
+    const asset = (metadata.assets || []).find(item => item.file === path.basename(assetPath));
+    if (!asset) return;
+    asset.importedInto = target;
+    asset.importedAt = asset.importedAt || new Date().toISOString();
+    asset.insertedAt = new Date().toISOString();
+    writeProjectMetadata(projectDir, metadata);
+  } catch {}
+}
+
+function copyProjectAsset(source, projectDir, target, requestId = crypto.randomUUID(), project = {}) {
   const folder = path.join(projectDir, 'YTX Media');
   fs.mkdirSync(folder, { recursive: true });
   const rawBase = path.basename(source).replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').trim() || 'media';
@@ -599,33 +805,48 @@ function copyProjectAsset(source, projectDir, target, requestId = crypto.randomU
   let destination = path.join(folder, rawBase);
   if (fs.existsSync(destination)) destination = path.join(folder, `${stem}-${requestId.slice(0, 8)}${extension}`);
   fs.copyFileSync(source, destination);
-  const metadataPath = path.join(folder, '.ytx-media.json');
-  let metadata = { version: 1, host: target, assets: [] };
-  try { metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8')); } catch {}
-  metadata.version = 1; metadata.host = target;
+  const { metadata } = readProjectMetadata(projectDir);
+  metadata.host = target;
+  metadata.project = {
+    name: project.name || path.basename(projectDir),
+    file: project.file || '',
+    folder: projectDir
+  };
   metadata.assets = (metadata.assets || []).filter(item => fs.existsSync(path.join(folder, item.file)));
-  metadata.assets.push({ file: path.basename(destination), originalPath: source, importedAt: new Date().toISOString(), size: fs.statSync(destination).size });
-  fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), 'utf8');
-  if (process.platform === 'win32') spawn('attrib.exe', ['+h', metadataPath], { windowsHide: true, stdio: 'ignore' });
+  metadata.assets.push({
+    file: path.basename(destination),
+    originalPath: source,
+    importedAt: new Date().toISOString(),
+    size: fs.statSync(destination).size,
+    importedInto: target
+  });
+  writeProjectMetadata(projectDir, metadata);
   return { path: destination };
 }
 
 function listProjectMedia(projectDir) {
-  if (!projectDir || !fs.existsSync(projectDir)) return { items: [] };
+  if (!projectDir || !fs.existsSync(projectDir)) return { items: [], project: null };
   const folder = path.join(projectDir, 'YTX Media');
-  if (!fs.existsSync(folder)) return { items: [], folder };
-  let metadata = {};
-  const metadataPath = path.join(folder, '.ytx-media.json');
-  try { metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8')); } catch {}
+  if (!fs.existsSync(folder)) return { items: [], folder, project: { name: path.basename(projectDir), folder: projectDir } };
+  const { metadata, metadataPath } = readProjectMetadata(projectDir);
   const items = (metadata.assets || []).map(item => {
     const filePath = path.join(folder, item.file);
-    try { const stat = fs.statSync(filePath); return { name: item.file, path: filePath, size: stat.size, importedAt: item.importedAt }; } catch { return null; }
+    try {
+      const stat = fs.statSync(filePath);
+      return { name: item.file, path: filePath, size: stat.size, importedAt: item.importedAt, insertedAt: item.insertedAt || '', importedInto: item.importedInto || '' };
+    } catch { return null; }
   }).filter(Boolean);
   if (items.length !== (metadata.assets || []).length) {
-    metadata.assets = items.map(item => ({ file: item.name, importedAt: item.importedAt, size: item.size }));
-    try { fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), 'utf8'); if (process.platform === 'win32') spawn('attrib.exe', ['+h', metadataPath], { windowsHide: true, stdio: 'ignore' }); } catch {}
+    const known = new Set(items.map(item => item.name));
+    metadata.assets = (metadata.assets || []).filter(item => known.has(item.file));
+    try { writeProjectMetadata(projectDir, metadata); } catch {}
   }
-  return { items, folder };
+  return {
+    items,
+    folder,
+    metadataPath,
+    project: metadata.project || { name: path.basename(projectDir), folder: projectDir }
+  };
 }
 async function getProjectMedia(target) {
   const status = bridgeAppStatus(target || 'premiere').connected ? bridgeAppStatus(target || 'premiere') : bridgeAppStatus('aftereffects');
@@ -689,7 +910,10 @@ function findPython() {
   if (app.isPackaged) {
     const bundled = path.join(process.resourcesPath, 'python-venv', 'Scripts', 'python.exe');
     const userFallback = path.join(process.env.LOCALAPPDATA || '', 'YTX', 'python-venv', 'Scripts', 'python.exe');
-    return { command: fs.existsSync(bundled) ? bundled : userFallback, prefixArgs: [] };
+    const sharedFallback = path.join(process.env.ProgramData || 'C:\\ProgramData', 'YTX', 'python-venv', 'Scripts', 'python.exe');
+    const installRootFallback = path.join(path.dirname(process.execPath), 'resources', 'python-venv', 'Scripts', 'python.exe');
+    const command = [bundled, installRootFallback, sharedFallback, userFallback].find(candidate => fs.existsSync(candidate));
+    return { command: command || userFallback, prefixArgs: [] };
   }
   if (process.platform !== 'win32') return { command: 'python3', prefixArgs: [] };
   if (process.env.CLIPFORGE_PYTHON) return { command: process.env.CLIPFORGE_PYTHON, prefixArgs: [] };

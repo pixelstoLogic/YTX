@@ -1,5 +1,17 @@
 # YTX Studio changelog
 
+## 1.3.0 — 2026-10-28
+
+- Rebuilt the conversion workspace with drag-and-drop intake, a preview queue with thumbnails, per-file output format selection, and a hardware-aware performance readout.
+- Added compression for video, audio, and images with Light, Balanced, and Maximum presets, plus batch progress, cancellation, and preservation of files that already finished.
+- Added automatic performance tuning so worker and encoder-thread counts follow the computer's CPU and available memory.
+- Refreshed the editing and conversion interface with production-focused copy, motion, loaders, and clearer empty, running, completed, and cancelled states.
+- Moved browser-extension setup to a per-machine installer that writes Chrome, Edge, Brave, Opera, and Vivaldi policies in HKLM with read-back verification. The app keeps a UAC-approved repair path when policy keys are locked down.
+- Expanded the Adobe bridge with project-scoped media, project-file linking, managed `YTX Media` folders, JSON asset metadata, Insert and Insert again actions, and connection-aware Send to Premiere and Send to After Effects controls.
+- Added YouTube Shorts, youtu.be, and live URL support, with SPA navigation detection so the handoff button follows the current video.
+- Improved cancellation reporting so stopped conversions are labelled accurately in the queue and transfer history.
+- Hardened metadata and bridge handling against UTF-8 BOM files, stale project paths, and interrupted imports.
+
 ## 1.2.0 — 2026-10-28
 
 - Added a tagged release pipeline that builds the installer, signs the browser extension into CRX3, publishes `updates.xml` and `SHA256SUMS.txt`, and only marks the highest version as GitHub's latest release.

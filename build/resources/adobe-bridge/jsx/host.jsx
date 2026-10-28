@@ -139,3 +139,20 @@ function ytxGetProjectInfo() {
         return "ERR|" + error.toString();
     }
 }
+
+function ytxGetProjectStatus() {
+    try {
+        if (ytxIsPremiere()) {
+            if (!app.project) return "OK||||";
+            var projectFile = app.project.path || "";
+            var folder = projectFile ? new File(projectFile).parent.fsName : "";
+            var name = app.project.name || (projectFile ? new File(projectFile).name : "");
+            return "OK|" + name + "|" + folder + "|" + projectFile;
+        }
+        if (!app.project) return "OK||||";
+        var file = app.project.file && app.project.file.exists ? app.project.file : null;
+        return "OK|" + (file ? file.name : "") + "|" + (file ? file.parent.fsName : "") + "|" + (file ? file.fsName : "");
+    } catch (error) {
+        return "ERR|" + error.toString();
+    }
+}
