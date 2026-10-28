@@ -231,6 +231,10 @@ async function exportMedia(adobeTarget = '') {
   status.className = 'status'; $('exportBtn').classList.add('busy');
   $('sendPremiere').disabled = $('sendAfterEffects').disabled = true;
   try {
+    if (adobeTarget) {
+      const bridge = await window.studio.getAdobeStatus();
+      if (!bridge[adobeTarget]?.connected) throw Error(`${adobeTarget === 'premiere' ? 'Premiere Pro' : 'After Effects'} is not connected to YTX. Open a saved project, restart Adobe after installation if needed, then select Window → Extensions (Legacy) → YTX Bridge and retry.`);
+    }
     const extension = format === 'video' ? $('videoContainer').value : $('audioContainer').value;
     const name = $('projectName').textContent || 'video';
     const options = { start, end, audio: format === 'audio', filename: name + '-trim.' + extension, format: extension, videoCodec: $('videoCodec').value, audioCodec: $('audioCodec').value, colorProfile: $('colorProfile').value, videoQuality: $('videoQuality').value, audioQuality: $('audioQuality').value };
@@ -250,13 +254,34 @@ async function exportMedia(adobeTarget = '') {
 }
 $('exportBtn').onclick = () => exportMedia();
 $('exportVideoTop').onclick = () => { chooseFormat('video'); exportMedia(); };
-$('convertTop').onclick = $('convertBatchBtn').onclick = async () => {
-  const options = { format: format === 'video' ? $('videoContainer').value : $('audioContainer').value, videoCodec: $('videoCodec').value, audioCodec: $('audioCodec').value, colorProfile: $('colorProfile').value, videoQuality: $('videoQuality').value, audioQuality: $('audioQuality').value, kind: format };
-  $('exportStatus').textContent = 'Choose one or more source files and an output folder…'; $('exportStatus').className = 'status'; showProgress('Preparing batch conversion…');
-  $('convertBatchBtn').disabled = $('convertTop').disabled = true;
-  try { const result = await window.studio.convertBatch(options); if (result.canceled) { $('exportStatus').textContent = 'Conversion cancelled.'; return; } if (result.error) throw Error(result.error); $('exportStatus').textContent = `Converted ${result.files.length} file(s).`; }
-  catch (error) { $('exportStatus').textContent = error.message; $('exportStatus').className = 'status error'; }
-  finally { $('convertBatchBtn').disabled = $('convertTop').disabled = false; }
+function showWorkspace(name) {
+  const converter = name === 'converter';
+  $('editorWorkspace').classList.toggle('hidden', converter);
+  $('converterWorkspace').classList.toggle('hidden', !converter);
+  $('editorModeBtn').classList.toggle('active', !converter);
+  $('converterModeBtn').classList.toggle('active', converter);
+  if (converter) renderConversionTransfers();
+}
+$('editorModeBtn').onclick = $('backToEditorBtn').onclick = () => showWorkspace('editor');
+$('converterModeBtn').onclick = () => showWorkspace('converter');
+$('convertBatchBtn').onclick = () => showWorkspace('converter');
+$('openTransferCenterBtn').onclick = () => openDownloadCenter('transfers');
+async function startBatchConversion(options, statusNode, button) {
+  statusNode.textContent = 'Choose one or more source files, then choose an output folder…'; statusNode.className = 'status';
+  button.disabled = true;
+  try {
+    const result = await window.studio.convertBatch(options);
+    if (result.canceled) { statusNode.textContent = 'Conversion cancelled.'; return; }
+    if (result.error) throw Error(result.error);
+    statusNode.textContent = `Converted ${result.files.length} file(s).`;
+    renderConversionTransfers();
+  } catch (error) { statusNode.textContent = error.message; statusNode.className = 'status error'; }
+  finally { button.disabled = false; }
+}
+$('startConversionBtn').onclick = () => {
+  const kind = $('convertKind').value, codec = $('convertCodec').value;
+  const options = { kind, format: $('convertContainer').value, colorProfile: $('convertColor').value, videoCodec: kind === 'video' ? codec : $('videoCodec').value, audioCodec: kind === 'audio' ? codec : $('audioCodec').value, videoQuality: $('convertQuality').value, audioQuality: $('audioQuality').value };
+  startBatchConversion(options, $('converterStatus'), $('startConversionBtn'));
 };
 $('sendPremiere').onclick = () => exportMedia('premiere');
 $('sendAfterEffects').onclick = () => exportMedia('aftereffects');
@@ -290,6 +315,23 @@ function renderTransfers() {
     row.append(icon, copy, action); root.appendChild(row);
   }
 }
+function renderConversionTransfers() {
+  const root = $('conversionProgressList');
+  if (!root) return;
+  const items = transferHistory.filter(item => item.type === 'convert');
+  root.replaceChildren();
+  if (!items.length) { const empty = document.createElement('div'); empty.className = 'center-empty'; empty.textContent = 'Your conversions and progress will appear here.'; root.appendChild(empty); return; }
+  for (const item of items) {
+    const row = document.createElement('article'); row.className = 'conversion-row';
+    const head = document.createElement('div'); head.className = 'conversion-row-head';
+    const title = document.createElement('strong'); title.textContent = item.state === 'active' ? (item.message || 'Converting files…') : item.state === 'complete' ? 'Conversion complete' : 'Conversion failed';
+    const percent = document.createElement('b'); percent.textContent = item.state === 'complete' ? '100%' : `${Math.round(item.progress || 0)}%`;
+    head.append(title, percent); row.appendChild(head);
+    const track = document.createElement('div'); track.className = 'conversion-track'; const fill = document.createElement('i'); fill.style.width = `${Math.max(3, item.progress || 0)}%`; track.appendChild(fill); row.appendChild(track);
+    const detail = document.createElement('small'); detail.textContent = item.error || (item.paths?.length ? item.paths.map(p => p.split(/[\\/]/).pop()).join(', ') : item.state === 'active' ? (item.message || 'Preparing conversion…') : 'Finished'); row.appendChild(detail);
+    root.appendChild(row);
+  }
+}
 function recordTransfer(task) {
   let item = transferHistory.find(entry => entry.id === task.id);
   if (!item) { item = { id: task.id || `${Date.now()}`, type: task.type || 'download', title: task.message || '', state: 'active', progress: 0, paths: [], createdAt: Date.now() }; transferHistory.unshift(item); }
@@ -298,7 +340,7 @@ function recordTransfer(task) {
   if (task.files?.length) item.paths = task.files.map(file => file.path).filter(Boolean);
   if (task.done) { item.state = task.error ? 'failed' : 'complete'; item.error = task.error || ''; item.progress = task.error ? item.progress : 100; }
   while (transferHistory.length > 30) transferHistory.pop();
-  saveTransferHistory(); renderTransfers();
+  saveTransferHistory(); renderTransfers(); renderConversionTransfers();
 }
 renderTransfers();
 window.studio.onTaskProgress(task => {
@@ -308,6 +350,15 @@ window.studio.onTaskProgress(task => {
   const mb = n => `${(n / 1048576).toFixed(1)} MB`;
   $('taskMeta').textContent = task.total ? `${mb(task.downloaded || 0)} / ${mb(task.total)}${task.speed ? ` · ${(task.speed / 1048576).toFixed(1)} MB/s` : ''}${task.eta ? ` · ${task.eta}s left` : ''}` : (task.done ? 'Complete' : 'Connecting to stream…');
   if (task.done) { $('taskMessage').textContent = task.error ? 'Task failed' : 'Task complete'; if (task.error) $('taskMeta').textContent = task.error; }
+  if (task.type === 'update') {
+    const progress = $('updateDownloadProgress');
+    progress.hidden = false;
+    $('updateProgressFill').style.width = `${Math.max(3, task.progress || 0)}%`;
+    $('updateProgressPercent').textContent = `${Math.round(task.progress || 0)}%`;
+    const mb = n => `${(n / 1048576).toFixed(1)} MB`;
+    $('updateProgressMeta').textContent = task.total ? `${mb(task.downloaded || 0)} / ${mb(task.total)}${task.speed ? ` · ${(task.speed / 1048576).toFixed(1)} MB/s` : ''}` : (task.error || task.message || 'Connecting to GitHub…');
+    if (task.done && task.error) $('updateStatus').textContent = task.error;
+  }
 });
 function openDownloadCenter(tab = 'transfers') { $('downloadCenter').classList.remove('hidden'); selectCenterTab(tab); }
 function closeDownloadCenter() { $('downloadCenter').classList.add('hidden'); }
@@ -328,11 +379,12 @@ async function checkReleaseUpdate() {
     releaseInfo = await window.studio.checkUpdates();
     if (releaseInfo.error) throw Error(releaseInfo.error);
     $('updateVersion').textContent = `Installed version ${releaseInfo.currentVersion || '1.1.5'}`;
-    $('updateTitle').textContent = releaseInfo.available ? `YTX ${releaseInfo.latestVersion} is available` : 'You’re up to date';
-    $('updateStatus').textContent = releaseInfo.available ? (releaseInfo.asset ? `${releaseInfo.asset.name} is ready to download from GitHub.` : 'This release has no YTX installer asset yet.') : releaseInfo.message || `Latest checked version: ${releaseInfo.latestVersion || releaseInfo.currentVersion}.`;
+    $('updateTitle').textContent = releaseInfo.updated ? `YTX updated to ${releaseInfo.latestVersion}` : releaseInfo.available ? `YTX ${releaseInfo.latestVersion} is available` : 'You’re up to date';
+    $('updateStatus').textContent = releaseInfo.updated ? `Update installed successfully. ${releaseInfo.message || ''}` : releaseInfo.available ? (releaseInfo.asset ? `${releaseInfo.asset.name} is ready to download from GitHub.` : 'This release has no YTX installer asset yet.') : releaseInfo.message || `Latest checked version: ${releaseInfo.latestVersion || releaseInfo.currentVersion}.`;
     $('openReleaseBtn').classList.toggle('hidden', !releaseInfo.url);
     $('downloadUpdateBtn').classList.toggle('hidden', !(releaseInfo.available && releaseInfo.asset));
     $('updateNotes').textContent = releaseInfo.notes || 'No release notes were published.'; $('updateNotes').classList.remove('hidden');
+    if (releaseInfo.updated) { $('changelogVersion').textContent = `YTX ${releaseInfo.latestVersion} · just installed`; $('changelogText').textContent = releaseInfo.notes || 'No release notes were published.'; }
     setUpdateBadge(Boolean(releaseInfo.available));
   } catch (error) { $('updateTitle').textContent = 'Update check unavailable'; $('updateStatus').textContent = error.message; setUpdateBadge(false); }
   finally { $('checkUpdatesBtn').disabled = false; }
@@ -340,8 +392,8 @@ async function checkReleaseUpdate() {
 $('checkUpdatesBtn').onclick = checkReleaseUpdate;
 $('downloadUpdateBtn').onclick = async () => {
   if (!releaseInfo?.asset) return;
-  $('downloadUpdateBtn').disabled = true; $('updateStatus').textContent = 'Downloading and verifying the installer…';
-  try { const result = await window.studio.downloadUpdate(releaseInfo.asset); if (result.error) throw Error(result.error); installerPath = result.path; $('updateStatus').textContent = `Verified installer saved to ${installerPath}`; $('openInstallerBtn').classList.remove('hidden'); }
+  $('downloadUpdateBtn').disabled = true; $('updateDownloadProgress').hidden = false; $('updateProgressFill').style.width = '3%'; $('updateProgressPercent').textContent = '0%'; $('updateStatus').textContent = 'Downloading update…';
+  try { const result = await window.studio.downloadUpdate({ ...releaseInfo.asset, latestVersion: releaseInfo.latestVersion, notes: releaseInfo.notes }); if (result.error) throw Error(result.error); installerPath = result.path; $('updateStatus').textContent = result.installing ? 'Download verified. Starting the installer now—approve any Windows prompt to finish the update.' : `Verified installer saved to ${installerPath}`; if (!result.installing) $('openInstallerBtn').classList.remove('hidden'); }
   catch (error) { $('updateStatus').textContent = error.message; }
   finally { $('downloadUpdateBtn').disabled = false; }
 };
@@ -355,7 +407,7 @@ async function refreshAdobe() {
     const state = await window.studio.getAdobeStatus();
     $('premiereState').classList.toggle('connected-dot', state.premiere.connected); $('premiereLabel').textContent = state.premiere.connected ? 'Connected' : (state.premiere.running ? 'Active · open YTX Bridge' : 'Not running');
     $('aeState').classList.toggle('connected-dot', state.aftereffects.connected); $('aeLabel').textContent = state.aftereffects.connected ? 'Connected' : (state.aftereffects.running ? 'Active · open YTX Bridge' : 'Not running');
-    $('sendPremiere').disabled = !state.premiere.connected; $('sendAfterEffects').disabled = !state.aftereffects.connected;
+    $('sendPremiere').disabled = $('sendAfterEffects').disabled = false;
   } catch {}
 }
 setInterval(refreshAdobe, 1500); refreshAdobe();
