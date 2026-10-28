@@ -5,7 +5,8 @@
     return location.hostname === 'youtu.be' || (location.hostname.endsWith('youtube.com') && location.pathname === '/watch' && !!new URLSearchParams(location.search).get('v'));
   }
   function installButton() {
-    if (!validWatchPage() || !document.querySelector('video') || document.getElementById(BUTTON_ID)) return;
+    if (!validWatchPage()) { document.getElementById(BUTTON_ID)?.remove(); return; }
+    if (!document.querySelector('video') || document.getElementById(BUTTON_ID)) return;
     const button = document.createElement('button');
     button.id = BUTTON_ID;
     button.type = 'button';
@@ -15,6 +16,7 @@
     button.addEventListener('click', () => {
       if (!validWatchPage()) return;
       queued = true;
+      button.textContent = 'Opening YTX Studio…';
       location.href = 'ytx://download?url=' + encodeURIComponent(location.href);
       setTimeout(() => { if (queued) button.textContent = 'Open YTX Studio to continue'; }, 700);
     });
@@ -22,6 +24,8 @@
   }
   const observer = new MutationObserver(installButton);
   observer.observe(document.documentElement, { childList: true, subtree: true });
+  document.addEventListener('yt-navigate-finish', installButton);
+  window.addEventListener('popstate', installButton);
   installButton();
 })();
 
