@@ -1,6 +1,6 @@
 {
   "name": "ytx-video-studio",
-  "version": "1.1.6",
+  "version": "1.1.7",
   "description": "YTX online video editor and media downloader",
   "author": "ARYAN ARYA",
   "main": "main.js",
@@ -51,6 +51,10 @@
       {
         "from": "assets/ytx-mark.png",
         "to": "ytx-mark.png"
+      },
+      {
+        "from": "build/ytx.ico",
+        "to": "ytx.ico"
       },
       {
         "from": "backend.py",
