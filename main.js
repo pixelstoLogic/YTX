@@ -25,6 +25,9 @@ const adobeHeartbeats = new Map();
 const adobeCommands = { premiere: [], aftereffects: [] };
 const adobeWaiters = new Map();
 const preferencesPath = () => path.join(app.getPath('userData'), 'preferences.json');
+const updateStatePath = () => path.join(app.getPath('userData'), 'update-state.json');
+function readUpdateState() { try { return JSON.parse(fs.readFileSync(updateStatePath(), 'utf8')); } catch { return {}; } }
+function writeUpdateState(state) { fs.mkdirSync(path.dirname(updateStatePath()), { recursive: true }); fs.writeFileSync(updateStatePath(), JSON.stringify(state, null, 2), 'utf8'); }
 function loadPreferences() { try { return { openAtLogin: false, keepInTray: false, ...JSON.parse(fs.readFileSync(preferencesPath(), 'utf8')) }; } catch { return { openAtLogin: false, keepInTray: false }; } }
 let preferences = { openAtLogin: false, keepInTray: false };
 
@@ -57,6 +60,10 @@ function createWindow(hidden = false) {
   return win;
 }
 app.whenReady().then(() => {
+  const updateState = readUpdateState();
+  if (updateState.pending && !isNewerVersion(updateState.pending.version, app.getVersion())) {
+    writeUpdateState({ installed: updateState.pending, installedAt: new Date().toISOString() });
+  }
   preferences = loadPreferences();
   app.setAsDefaultProtocolClient('ytx');
   createTray();
@@ -71,9 +78,10 @@ app.on('window-all-closed', () => { if (process.platform !== 'darwin' && !prefer
 
 function createTray() {
   if (tray) return;
-  const iconFile = app.isPackaged ? path.join(process.resourcesPath, 'ytx-mark.png') : path.join(__dirname, 'assets', 'ytx-mark.png');
-  const icon = nativeImage.createFromPath(iconFile);
-  tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon.resize({ width: 16, height: 16 }));
+  const candidates = app.isPackaged ? [path.join(process.resourcesPath, 'ytx.ico'), path.join(process.resourcesPath, 'ytx-mark.png')] : [path.join(__dirname, 'build', 'ytx.ico'), path.join(__dirname, 'assets', 'ytx-mark.png')];
+  const icon = candidates.map(file => nativeImage.createFromPath(file)).find(candidate => !candidate.isEmpty());
+  if (!icon) { console.error('YTX tray icon could not be loaded from:', candidates); return; }
+  tray = new Tray(icon.resize({ width: 16, height: 16 }));
   tray.setToolTip('YTX Studio · Ctrl+Alt+Y to open');
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Open YTX Studio', click: () => { if (!mainWindow) createWindow(); else { mainWindow.show(); mainWindow.focus(); } } },
@@ -215,7 +223,9 @@ async function checkForUpdates() {
     if (!response.ok) return { error: `GitHub update check failed (${response.status}).` };
     const release = await response.json();
     const asset = (release.assets || []).find(item => /^YTX-Setup-.*\.exe$/i.test(item.name));
-    return { ok: true, currentVersion: app.getVersion(), latestVersion: release.tag_name || '', available: isNewerVersion(release.tag_name, app.getVersion()), name: release.name || release.tag_name || 'YTX update', notes: release.body || 'No release notes provided.', url: release.html_url || `https://github.com/${GITHUB_REPOSITORY}/releases`, asset: asset ? { name: asset.name, size: asset.size, url: asset.browser_download_url, digest: asset.digest || '' } : null, publishedAt: release.published_at || '' };
+    const state = readUpdateState(), latestVersion = release.tag_name || '';
+    const installed = state.installed && state.installed.version === latestVersion ? state.installed : null;
+    return { ok: true, currentVersion: app.getVersion(), latestVersion, updated: Boolean(installed), message: installed ? `Successfully installed on ${new Date(state.installedAt || Date.now()).toLocaleString()}.` : '', available: !installed && isNewerVersion(latestVersion, app.getVersion()), name: release.name || latestVersion || 'YTX update', notes: release.body || 'No release notes provided.', url: release.html_url || `https://github.com/${GITHUB_REPOSITORY}/releases`, asset: asset ? { name: asset.name, size: asset.size, url: asset.browser_download_url, digest: asset.digest || '' } : null, publishedAt: release.published_at || '' };
   } catch (error) { return { error: `Could not reach GitHub: ${error.message}` }; }
 }
 async function downloadReleaseAsset(asset) {
@@ -233,7 +243,15 @@ async function downloadReleaseAsset(asset) {
     await pipeline(Readable.fromWeb(response.body), tracker, fs.createWriteStream(filePath));
     if (asset.digest && asset.digest.startsWith('sha256:') && hash.digest('hex').toLowerCase() !== asset.digest.slice(7).toLowerCase()) { await fs.promises.rm(filePath, { force: true }); return { error: 'The installer checksum did not match GitHub release metadata; the file was removed.' }; }
     sendTaskProgress({ id, type: 'update', progress: 100, downloaded, total: total || downloaded, message: `Downloaded ${asset.name}`, done: true, path: filePath });
-    return { path: filePath };
+    if (process.platform !== 'win32') return { path: filePath, installing: false };
+    const version = String(asset.latestVersion || '').replace(/^v/i, '');
+    if (!version) return { path: filePath, installing: false };
+    writeUpdateState({ ...readUpdateState(), pending: { version, notes: asset.notes || '', name: asset.name } });
+    const installer = spawn(filePath, [], { detached: true, stdio: 'ignore', windowsHide: false });
+    installer.once('error', error => { const state = readUpdateState(); delete state.pending; writeUpdateState(state); console.error('Unable to launch YTX installer:', error); });
+    installer.unref();
+    setTimeout(() => app.quit(), 500);
+    return { path: filePath, installing: true };
   } catch (error) { sendTaskProgress({ id, type: 'update', progress: 0, message: `Could not download ${asset.name}`, done: true, error: error.message }); return { error: error.message }; }
 }
 
