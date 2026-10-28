@@ -1,0 +1,100 @@
+{
+  "name": "ytx-video-studio",
+  "version": "1.1.6",
+  "description": "YTX online video editor and media downloader",
+  "author": "ARYAN ARYA",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "prepare:installer": "node scripts/prepare-installer.js",
+    "installer": "npm run prepare:installer && electron-builder --win nsis --x64"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^26.18.0",
+    "ffmpeg-static": "^5.3.0"
+  },
+  "allowScripts": {
+    "electron@33.4.11": true,
+    "ffmpeg-static@5.3.0": true
+  },
+  "build": {
+    "appId": "com.aryanarya.ytx",
+    "productName": "YTX",
+    "copyright": "Copyright © 2026 ARYAN ARYA",
+    "asar": true,
+    "files": [
+      "**/*",
+      "!build/**",
+      "!dist/**",
+      "!README.md",
+      "!requirements.txt",
+      "!**/__pycache__/**"
+    ],
+    "extraResources": [
+      {
+        "from": "build/resources/bootstrap",
+        "to": "bootstrap"
+      },
+      {
+        "from": "build/resources/ffmpeg",
+        "to": "ffmpeg"
+      },
+      {
+        "from": "build/resources/adobe-bridge",
+        "to": "adobe-bridge"
+      },
+      {
+        "from": "build/resources/browser-extension",
+        "to": "browser-extension"
+      },
+      {
+        "from": "assets/ytx-mark.png",
+        "to": "ytx-mark.png"
+      },
+      {
+        "from": "backend.py",
+        "to": "backend.py"
+      },
+      {
+        "from": "COPYRIGHT.txt",
+        "to": "COPYRIGHT.txt"
+      },
+      {
+        "from": "THIRD_PARTY_NOTICES.txt",
+        "to": "THIRD_PARTY_NOTICES.txt"
+      }
+    ],
+    "win": {
+      "icon": "build/ytx.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "selectPerMachineByDefault": true,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "artifactName": "YTX-Setup-${version}.${ext}",
+      "include": "build/installer.nsh"
+    },
+    "protocols": [
+      {
+        "name": "YTX video handoff",
+        "schemes": [
+          "ytx"
+        ]
+      }
+    ]
+  }
+}
+
