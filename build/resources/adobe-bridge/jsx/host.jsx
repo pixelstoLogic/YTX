@@ -19,7 +19,8 @@ function ytxImportToTimeline(path) {
                 if (!sequence) return "ERR|Premiere could not create a sequence for this media.";
             } else {
                 var position = sequence.getPlayerPosition();
-                sequence.videoTracks[0].insertClip(imported, position.ticks, 0, 0);
+                // Premiere's ExtendScript API returns the playhead as a ticks string.
+                sequence.videoTracks[0].insertClip(imported, position, 0, 0);
             }
             return "OK|Media inserted into the active Premiere timeline.";
         }
