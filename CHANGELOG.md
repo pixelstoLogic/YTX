@@ -1,5 +1,14 @@
 # YTX Studio changelog
 
+## 1.1.7 — 2026-10-28
+
+- Added a dedicated conversion workspace with conversion-only progress and results.
+- Added live percentage and transfer details for update downloads; verified installers now launch automatically.
+- Added post-install update confirmation and release notes in the Updates and Changelog views.
+- Fixed tray icon loading with an ICO fallback.
+- Added installer prompts for detected Adobe hosts and Chromium browsers, including Adobe CEP setup and browser extension instructions.
+- Improved Adobe handoff errors so YTX explains when the bridge panel must be opened.
+
 ## 1.1.6.5 — 2026-10-28
 
 - Test release: validates in-app update detection, changelog display, and installer handoff.
