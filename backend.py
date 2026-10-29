@@ -15,24 +15,43 @@ JOBS = {}
 JOBS_LOCK = threading.Lock()
 JOB_EVENTS = {}
 
-VIDEO_CODECS = {'h264': 'libx264', 'hevc': 'libx265', 'av1': 'libaom-av1', 'vp9': 'libvpx-vp9', 'prores': 'prores_ks', 'mpeg4': 'mpeg4', 'copy': 'copy'}
-AUDIO_CODECS = {'aac': 'aac', 'mp3': 'libmp3lame', 'opus': 'libopus', 'vorbis': 'libvorbis', 'flac': 'flac', 'pcm': 'pcm_s16le', 'copy': 'copy'}
+VIDEO_CODECS = {
+    'h264': 'libx264', 'hevc': 'libx265', 'av1': 'libaom-av1',
+    'vp9': 'libvpx-vp9', 'vp8': 'libvpx',
+    'prores': 'prores_ks', 'prores_lt': 'prores_ks', 'prores_hq': 'prores_ks', 'prores_4444': 'prores_ks',
+    'dnxhd': 'dnxhd', 'dnxhr': 'dnxhd',
+    'mpeg2': 'mpeg2video', 'mpeg4': 'mpeg4',
+    'theora': 'libtheora', 'wmv2': 'wmv2', 'h263': 'h263', 'flv1': 'flv1',
+    'copy': 'copy'
+}
+AUDIO_CODECS = {
+    'aac': 'aac', 'mp3': 'libmp3lame', 'opus': 'libopus', 'vorbis': 'libvorbis',
+    'flac': 'flac', 'alac': 'alac', 'pcm': 'pcm_s16le', 'pcm24': 'pcm_s24le', 'pcm32': 'pcm_s32le',
+    'ac3': 'ac3', 'eac3': 'eac3', 'mp2': 'mp2', 'wmav2': 'wmav2',
+    'copy': 'copy'
+}
 COLOR_PROFILES = {
     'preserve': None,
     'bt709': ('bt709', 'bt709', 'bt709', 'tv'),
+    'srgb': ('bt709', 'iec61966-2-1', 'bt709', 'tv'),
     'bt2020': ('bt2020', 'bt2020-10', 'bt2020nc', 'tv'),
+    'bt2020_hlg': ('bt2020', 'arib-std-b67', 'bt2020nc', 'tv'),
+    'bt2020_pq': ('bt2020', 'smpte2084', 'bt2020nc', 'tv'),
+    'display_p3': ('smpte432', 'iec61966-2-1', 'bt709', 'tv'),
+    'dci_p3': ('smpte431', 'bt709', 'bt709', 'tv'),
     'smpte170m': ('smpte170m', 'smpte170m', 'smpte170m', 'tv'),
     'bt470bg': ('bt470bg', 'gamma28', 'bt470bg', 'tv'),
     'smpte240m': ('smpte240m', 'smpte240m', 'smpte240m', 'tv'),
+    'linear': ('bt709', 'linear', 'bt709', 'tv'),
 }
-VIDEO_FORMATS = {'mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v', 'ts'}
-AUDIO_FORMATS = {'mp3', 'm4a', 'wav', 'flac', 'ogg', 'opus'}
-IMAGE_FORMATS = {'jpg', 'jpeg', 'png', 'webp'}
+VIDEO_FORMATS = {'mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v', 'ts', 'm2ts', 'mts', 'mpg', 'mxf', 'wmv', 'flv', '3gp', 'ogv'}
+AUDIO_FORMATS = {'mp3', 'm4a', 'wav', 'flac', 'ogg', 'opus', 'aac', 'ac3', 'wma', 'aiff'}
+IMAGE_FORMATS = {'jpg', 'jpeg', 'png', 'webp', 'bmp', 'tif', 'tiff', 'tga'}
 OUTPUT_FORMATS = VIDEO_FORMATS | AUDIO_FORMATS | IMAGE_FORMATS
 
-VIDEO_INPUTS = {'mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v', 'ts', 'mts', 'm2ts', 'wmv', 'flv', '3gp', 'ogv'}
-AUDIO_INPUTS = {'mp3', 'm4a', 'wav', 'flac', 'ogg', 'opus', 'aac', 'wma', 'aiff', 'aif'}
-IMAGE_INPUTS = {'jpg', 'jpeg', 'png', 'webp', 'bmp', 'tif', 'tiff', 'gif'}
+VIDEO_INPUTS = {'mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v', 'ts', 'mts', 'm2ts', 'mpg', 'mpeg', 'mxf', 'wmv', 'flv', '3gp', 'ogv'}
+AUDIO_INPUTS = {'mp3', 'm4a', 'wav', 'flac', 'ogg', 'opus', 'aac', 'ac3', 'wma', 'aiff', 'aif'}
+IMAGE_INPUTS = {'jpg', 'jpeg', 'png', 'webp', 'bmp', 'tif', 'tiff', 'gif', 'tga'}
 
 COMPRESSION_PRESETS = {
     'light': {'videoCrf': 21, 'maxHeight': 1080, 'preset': 'medium', 'audioBitrate': 160, 'imageQuality': 3},
@@ -40,31 +59,51 @@ COMPRESSION_PRESETS = {
     'maximum': {'videoCrf': 28, 'maxHeight': 720, 'preset': 'fast', 'audioBitrate': 96, 'imageQuality': 10},
 }
 
-IMAGE_CODECS = {'jpg': 'mjpeg', 'jpeg': 'mjpeg', 'png': 'png', 'webp': 'libwebp'}
+IMAGE_CODECS = {'jpg': 'mjpeg', 'jpeg': 'mjpeg', 'png': 'png', 'webp': 'libwebp', 'bmp': 'bmp', 'tif': 'tiff', 'tiff': 'tiff', 'tga': 'targa'}
 
 VIDEO_CODECS_BY_CONTAINER = {
     'mp4': ('h264', 'hevc', 'av1', 'mpeg4', 'copy'),
     'm4v': ('h264', 'hevc', 'mpeg4', 'copy'),
-    'mov': ('h264', 'hevc', 'prores', 'mpeg4', 'copy'),
-    'mkv': ('h264', 'hevc', 'av1', 'vp9', 'prores', 'mpeg4', 'copy'),
-    'webm': ('av1', 'vp9', 'copy'),
-    'avi': ('h264', 'mpeg4', 'copy'),
-    'ts': ('h264', 'hevc', 'mpeg4', 'copy'),
+    'mov': ('h264', 'hevc', 'prores', 'prores_lt', 'prores_hq', 'prores_4444', 'dnxhd', 'dnxhr', 'mpeg4', 'copy'),
+    'mkv': ('h264', 'hevc', 'av1', 'vp9', 'vp8', 'prores', 'prores_hq', 'prores_4444', 'dnxhd', 'dnxhr', 'mpeg2', 'mpeg4', 'theora', 'copy'),
+    'webm': ('av1', 'vp9', 'vp8', 'copy'),
+    'avi': ('h264', 'mpeg4', 'mpeg2', 'wmv2', 'copy'),
+    'ts': ('h264', 'hevc', 'mpeg2', 'mpeg4', 'copy'),
+    'm2ts': ('h264', 'hevc', 'mpeg2', 'copy'),
+    'mts': ('h264', 'hevc', 'mpeg2', 'copy'),
+    'mpg': ('mpeg2', 'mpeg4', 'copy'),
+    'mxf': ('dnxhd', 'dnxhr', 'prores', 'prores_hq', 'prores_4444', 'mpeg2', 'copy'),
+    'wmv': ('wmv2', 'copy'),
+    'flv': ('h264', 'flv1', 'copy'),
+    '3gp': ('h264', 'h263', 'mpeg4', 'copy'),
+    'ogv': ('theora', 'vp8', 'copy'),
 }
 AUDIO_CODECS_BY_CONTAINER = {
     'mp3': ('mp3', 'copy'),
-    'm4a': ('aac', 'copy'),
-    'wav': ('pcm', 'copy'),
+    'm4a': ('aac', 'alac', 'copy'),
+    'wav': ('pcm', 'pcm24', 'pcm32', 'copy'),
     'flac': ('flac', 'copy'),
-    'ogg': ('vorbis', 'opus', 'copy'),
+    'ogg': ('vorbis', 'opus', 'flac', 'copy'),
     'opus': ('opus', 'copy'),
-    'mp4': ('aac', 'mp3', 'copy'),
-    'm4v': ('aac', 'mp3', 'copy'),
-    'mov': ('aac', 'mp3', 'pcm', 'copy'),
-    'mkv': ('aac', 'mp3', 'opus', 'vorbis', 'flac', 'pcm', 'copy'),
+    'aac': ('aac', 'copy'),
+    'ac3': ('ac3', 'eac3', 'copy'),
+    'wma': ('wmav2', 'copy'),
+    'aiff': ('pcm', 'pcm24', 'pcm32', 'copy'),
+    'mp4': ('aac', 'mp3', 'alac', 'ac3', 'eac3', 'copy'),
+    'm4v': ('aac', 'mp3', 'alac', 'copy'),
+    'mov': ('aac', 'mp3', 'alac', 'pcm', 'pcm24', 'pcm32', 'ac3', 'eac3', 'copy'),
+    'mkv': ('aac', 'mp3', 'opus', 'vorbis', 'flac', 'alac', 'pcm', 'pcm24', 'pcm32', 'ac3', 'eac3', 'mp2', 'copy'),
     'webm': ('opus', 'vorbis', 'copy'),
-    'avi': ('mp3', 'pcm', 'copy'),
-    'ts': ('aac', 'mp3', 'copy'),
+    'avi': ('mp3', 'pcm', 'ac3', 'mp2', 'copy'),
+    'ts': ('aac', 'mp3', 'ac3', 'eac3', 'mp2', 'copy'),
+    'm2ts': ('aac', 'ac3', 'eac3', 'mp2', 'pcm', 'copy'),
+    'mts': ('aac', 'ac3', 'eac3', 'mp2', 'pcm', 'copy'),
+    'mpg': ('mp2', 'mp3', 'ac3', 'pcm', 'copy'),
+    'mxf': ('pcm', 'pcm24', 'pcm32', 'copy'),
+    'wmv': ('wmav2', 'mp3', 'copy'),
+    'flv': ('aac', 'mp3', 'copy'),
+    '3gp': ('aac', 'copy'),
+    'ogv': ('vorbis', 'opus', 'flac', 'copy'),
 }
 
 
@@ -74,9 +113,16 @@ def normalize_codecs(options, extension, audio_only):
     video = str(options.get('videoCodec') or 'h264').lower()
     audio = str(options.get('audioCodec') or 'aac').lower()
     if video not in video_allowed:
-        video = 'vp9' if extension == 'webm' else 'prores' if extension == 'mov' and options.get('compression') else 'h264'
+        defaults = {'webm': 'vp9', 'mxf': 'dnxhr', 'mpg': 'mpeg2', 'wmv': 'wmv2', 'flv': 'h264',
+                    '3gp': 'h264', 'ogv': 'theora', 'm2ts': 'h264', 'mts': 'h264'}
+        video = defaults.get(extension, 'h264')
+        if extension == 'mov' and options.get('compression'):
+            video = 'prores'
     if audio not in audio_allowed:
-        audio = 'opus' if extension == 'webm' else 'mp3' if extension in ('mp3', 'avi') else 'pcm' if extension == 'wav' else 'flac' if extension == 'flac' else 'aac'
+        defaults = {'webm': 'opus', 'mp3': 'mp3', 'avi': 'mp3', 'wav': 'pcm', 'flac': 'flac',
+                    'ogg': 'vorbis', 'opus': 'opus', 'm4a': 'aac', 'aac': 'aac', 'ac3': 'ac3',
+                    'wma': 'wmav2', 'aiff': 'pcm', 'mxf': 'pcm24'}
+        audio = defaults.get(extension, 'aac')
     if audio_only:
         video = 'copy'
     return video, audio
@@ -162,14 +208,27 @@ def resolve_preview(url):
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
         formats = info.get('formats') or []
-        progressive = [f for f in formats if f.get('url') and f.get('vcodec') != 'none' and f.get('acodec') != 'none' and f.get('protocol') in ('https', 'http')]
-        candidates = progressive or [f for f in formats if f.get('url') and f.get('vcodec') != 'none' and f.get('protocol') in ('https', 'http')]
+        playable = [f for f in formats if f.get('url') and f.get('protocol') in ('https', 'http')]
+        progressive = [f for f in playable if f.get('vcodec') != 'none' and f.get('acodec') != 'none']
+        video_only = [f for f in playable if f.get('vcodec') != 'none']
+        candidates = progressive or video_only
         max_preview_height = 720
         lower_or_equal = [f for f in candidates if not f.get('height') or f.get('height') <= max_preview_height]
         selected = max(lower_or_equal or candidates, key=lambda f: (f.get('height') or 0, f.get('tbr') or 0), default=info)
         preview_url = selected.get('url') or info.get('url')
         if not preview_url:
             return {'error': 'This video has no directly playable preview format.'}
+        # A video-only preview needs a separate audio stream to stay in sync.
+        audio_candidates = [f for f in playable if f.get('vcodec') == 'none' and f.get('acodec') not in (None, 'none')]
+        best_audio = max(audio_candidates, key=lambda f: (f.get('abr') or 0, f.get('tbr') or 0), default=None)
+        preview_audio_url = ''
+        if selected.get('acodec') in (None, 'none') and best_audio:
+            preview_audio_url = best_audio.get('url') or ''
+        # Source dimensions come from the largest video stream, not the 720p preview.
+        source_video = max((f for f in playable if f.get('vcodec') != 'none' and f.get('height')),
+                           key=lambda f: (f.get('height') or 0, f.get('width') or 0, f.get('tbr') or 0), default=None)
+        source_width = int((source_video or {}).get('width') or info.get('width') or 0)
+        source_height = int((source_video or {}).get('height') or info.get('height') or 0)
         video_formats = []
         audio_formats = []
         seen_video, seen_audio = set(), set()
@@ -180,7 +239,14 @@ def resolve_preview(url):
                 height = int(item['height'])
                 if height not in seen_video:
                     seen_video.add(height)
-                    video_formats.append({'id': item.get('format_id'), 'label': f"{height}p", 'height': height, 'tbr': item.get('tbr') or 0})
+                    label = f'{height}p'
+                    if height >= 4320:
+                        label += ' · 8K'
+                    elif height >= 2160:
+                        label += ' · 4K UHD'
+                    elif height >= 1440:
+                        label += ' · QHD'
+                    video_formats.append({'id': item.get('format_id'), 'label': label, 'height': height, 'tbr': item.get('tbr') or 0})
             elif item.get('acodec') != 'none' and item.get('vcodec') == 'none':
                 abr = int(item.get('abr') or 0)
                 if abr not in seen_audio:
@@ -188,14 +254,52 @@ def resolve_preview(url):
                     audio_formats.append({'id': item.get('format_id'), 'label': f"{abr or 'Best'} kbps", 'abr': abr})
         video_formats.sort(key=lambda item: item['height'])
         audio_formats.sort(key=lambda item: item['abr'])
-        return {'url': preview_url, 'title': info.get('title') or 'Online video', 'duration': info.get('duration') or 0,
-                'width': selected.get('width') or info.get('width') or 0, 'height': selected.get('height') or info.get('height') or 0,
-                'hasAudio': selected.get('acodec') not in (None, 'none'),
+        return {'url': preview_url, 'audioUrl': preview_audio_url, 'title': info.get('title') or 'Online video',
+                'duration': info.get('duration') or 0,
+                'width': selected.get('width') or source_width or 0, 'height': selected.get('height') or source_height or 0,
+                'sourceWidth': source_width, 'sourceHeight': source_height,
+                'hasAudio': selected.get('acodec') not in (None, 'none') or bool(preview_audio_url),
                 'thumbnail': info.get('thumbnail') or '', 'videoFormats': video_formats, 'audioFormats': audio_formats}
     except ImportError:
         return {'error': 'yt-dlp is missing. Run: python -m pip install -r requirements.txt'}
     except Exception as exc:
         return {'error': str(exc)}
+
+
+def ffmpeg_binary():
+    return os.environ.get('CLIPFORGE_FFMPEG') or shutil.which('ffmpeg')
+
+
+def probe_has_audio(path):
+    ffmpeg = ffmpeg_binary()
+    if not ffmpeg:
+        return True
+    try:
+        probe = subprocess.run([ffmpeg, '-hide_banner', '-nostdin', '-i', str(path)], capture_output=True, text=True)
+        text = (probe.stderr or '') + (probe.stdout or '')
+        return bool(re.search(r'Stream #\d+:\d+.*Audio:', text))
+    except Exception:
+        return True
+
+
+def merge_video_audio(video_path, audio_path, output_path):
+    ffmpeg = ffmpeg_binary()
+    if not ffmpeg:
+        return {'error': 'FFmpeg is required to merge the downloaded video and audio streams.'}
+    attempts = [
+        ['-map', '0:v:0', '-map', '1:a:0', '-c', 'copy'],
+        ['-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k'],
+        ['-map', '0:v:0', '-map', '1:a:0', '-c:v', 'libx264', '-preset', 'fast', '-crf', '20', '-c:a', 'aac', '-b:a', '192k']
+    ]
+    last_error = ''
+    for codec_args in attempts:
+        args = [ffmpeg, '-y', '-hide_banner', '-nostdin', '-i', str(video_path), '-i', str(audio_path)]
+        args += codec_args + ['-shortest', str(output_path)]
+        result = subprocess.run(args, capture_output=True, text=True)
+        if result.returncode == 0 and Path(output_path).exists():
+            return {'path': str(output_path)}
+        last_error = clean_error((result.stderr or '').splitlines())
+    return {'error': 'FFmpeg could not merge the downloaded video and audio streams.' + (f'\n{last_error}' if last_error else '')}
 
 
 def download_section(url, target, start, end, kind, video_format=None, audio_format=None, progress=None, transcode_options=None):
@@ -207,7 +311,6 @@ def download_section(url, target, start, end, kind, video_format=None, audio_for
             return {'error': 'The end time must be after the start time.'}
         target = Path(target)
         target.parent.mkdir(parents=True, exist_ok=True)
-        output_template = str(target.parent / (target.stem + '.source.%(ext)s'))
         def hook(data):
             if not progress:
                 return
@@ -215,28 +318,81 @@ def download_section(url, target, start, end, kind, video_format=None, audio_for
             progress({'status': data.get('status', 'downloading'), 'downloaded': data.get('downloaded_bytes', 0), 'total': total,
                       'percent': (data.get('downloaded_bytes', 0) / total * 100) if total else 0,
                       'speed': data.get('speed') or 0, 'eta': data.get('eta'), 'filename': Path(data.get('filename') or '').name})
-        options = {'noplaylist': True, 'quiet': True, 'no_warnings': True, 'no_progress': True, 'outtmpl': output_template,
-                   'progress_hooks': [hook],
-                   'download_ranges': download_range_func(None, [(start, end)]), 'force_keyframes_at_cuts': True}
+        base_options = {'noplaylist': True, 'quiet': True, 'no_warnings': True, 'no_progress': True,
+                        'progress_hooks': [hook], 'download_ranges': download_range_func(None, [(start, end)]),
+                        'force_keyframes_at_cuts': True}
+
+        def download_stream(selector, template, merge_format=''):
+            options = dict(base_options)
+            options.update({'format': selector, 'outtmpl': str(template)})
+            if merge_format:
+                options['merge_output_format'] = merge_format
+            with yt_dlp.YoutubeDL(options) as ydl:
+                ydl.download([url])
+
+        def find_files(suffix):
+            return sorted((p for p in target.parent.glob(target.stem + suffix) if p.is_file()),
+                          key=lambda p: p.stat().st_mtime, reverse=True)
+
+        source_path = None
+        merge_candidates = []
         if kind == 'audio':
-            audio_selector = f"bestaudio[abr<={int(audio_format)}]" if str(audio_format or '').isdigit() else 'bestaudio'
-            options.update({'format': audio_selector + '/bestaudio'})
+            audio_selector = f"bestaudio[abr<={int(audio_format)}]/bestaudio/best" if str(audio_format or '').isdigit() else 'bestaudio/best'
+            download_stream(audio_selector, target.parent / (target.stem + '.source.%(ext)s'))
+            candidates = find_files('.source.*')
+            if not candidates:
+                return {'error': 'yt-dlp completed but the downloaded audio file was not found.'}
+            source_path = candidates[0]
         else:
             selected = f"bestvideo[height<={int(video_format)}]" if str(video_format or '').isdigit() else 'bestvideo*'
-            options.update({'format': selected + '+bestaudio/best', 'merge_output_format': target.suffix.lower().lstrip('.') or 'mp4'})
-        with yt_dlp.YoutubeDL(options) as ydl:
-            ydl.download([url])
-        candidates = [p for p in target.parent.glob(target.stem + '.source.*') if p.is_file()]
-        if not candidates:
-            return {'error': 'yt-dlp completed but the trimmed source file was not found.'}
-        source_path = candidates[0]
+            merge_format = target.suffix.lower().lstrip('.') or 'mp4'
+            primary_error = ''
+            try:
+                download_stream(selected + '+bestaudio/best', target.parent / (target.stem + '.source.%(ext)s'), merge_format)
+                candidates = find_files('.source.*')
+                if candidates:
+                    source_path = candidates[0]
+            except Exception as exc:
+                primary_error = str(exc)
+
+            # Some videos expose no muxable "best" pair. Download the best video
+            # and best audio separately, then merge them explicitly, including
+            # when only a lower-bitrate audio track exists.
+            if source_path is None or not probe_has_audio(source_path):
+                video_selector = f"bestvideo[height<={int(video_format)}]/bestvideo*" if str(video_format or '').isdigit() else 'bestvideo*'
+                audio_selector = 'bestaudio/bestaudio*'
+                try:
+                    download_stream(video_selector, target.parent / (target.stem + '.video.%(ext)s'))
+                    download_stream(audio_selector, target.parent / (target.stem + '.audio.%(ext)s'))
+                except Exception as exc:
+                    message = str(exc) or primary_error or 'yt-dlp could not download the selected video and audio streams.'
+                    return {'error': message}
+                videos = [p for p in find_files('.video.*') if p.suffix.lower() not in ('.part', '.ytdl')]
+                audios = [p for p in find_files('.audio.*') if p.suffix.lower() not in ('.part', '.ytdl')]
+                if not videos:
+                    return {'error': primary_error or 'The selected video stream could not be downloaded.'}
+                if not audios:
+                    # No separate audio exists; keep the best progressive file if one was downloaded.
+                    if source_path is None:
+                        return {'error': 'This video has no downloadable audio track.'}
+                else:
+                    merged = target.parent / (target.stem + '.merged.mkv')
+                    result = merge_video_audio(videos[0], audios[0], merged)
+                    if result.get('error'):
+                        return result
+                    source_path = merged
+                    merge_candidates.extend(videos + audios)
+            if source_path is None:
+                return {'error': primary_error or 'yt-dlp completed but the downloaded video file was not found.'}
+
         result = transcode(str(source_path), str(target), transcode_options or {'kind': kind}, None, None)
         if result.get('error'):
             return result
-        try:
-            source_path.unlink()
-        except OSError:
-            pass
+        for leftover in [source_path, *merge_candidates]:
+            try:
+                Path(leftover).unlink()
+            except OSError:
+                pass
         return {'path': str(target)}
     except ImportError:
         return {'error': 'yt-dlp is missing. Run: python -m pip install -r requirements.txt'}
@@ -270,6 +426,55 @@ def probe_duration(source, ffmpeg):
     return int(match.group(1)) * 3600 + int(match.group(2)) * 60 + float(match.group(3))
 
 
+def probe_color_tags(ffmpeg, source):
+    tags = {'space': 'bt709', 'primaries': 'bt709', 'trc': 'bt709', 'range': 'tv'}
+    try:
+        probe = subprocess.run([ffmpeg, '-hide_banner', '-nostdin', '-i', str(source)], capture_output=True, text=True)
+        text = (probe.stderr or '') + (probe.stdout or '')
+        match = re.search(r'Video:.*?yuv\w*\(([^)]*)\)', text)
+        if not match:
+            return tags
+        parts = [part.strip() for part in match.group(1).split(',')]
+        for part in parts:
+            if part in ('tv', 'mpeg'):
+                tags['range'] = 'tv'
+            elif part in ('pc', 'jpeg'):
+                tags['range'] = 'pc'
+        known = ('bt709', 'bt470m', 'bt470bg', 'smpte170m', 'smpte240m', 'film', 'smpte428',
+                 'smpte431', 'smpte432', 'bt2020', 'bt2020nc', 'bt2020c', 'bt2020-10', 'bt2020-12',
+                 'smpte2084', 'arib-std-b67', 'iec61966-2-1', 'iec61966-2-4', 'srgb', 'linear')
+        colors = next((part for part in parts if '/' in part or part in known), '')
+        if colors:
+            combo = colors.split('/')
+            if len(combo) >= 3:
+                tags['space'], tags['primaries'], tags['trc'] = combo[0], combo[1], combo[2]
+            elif len(combo) == 2:
+                tags['space'], tags['primaries'] = combo[0], combo[1]
+            else:
+                tags['space'] = combo[0]
+                tags['primaries'] = 'bt2020' if combo[0] == 'bt2020nc' else combo[0]
+                tags['trc'] = 'bt2020-10' if combo[0] == 'bt2020nc' else combo[0]
+    except Exception:
+        pass
+    return tags
+
+
+def target_video_quality(options, preset):
+    try:
+        crf = int(preset['videoCrf'] if preset else (options.get('videoQuality') or 20))
+    except (TypeError, ValueError):
+        crf = 20
+    return crf if crf in (18, 20, 21, 23, 24, 28) else 20
+
+
+def target_audio_bitrate(options, preset, fallback=192):
+    try:
+        bitrate = int(preset['audioBitrate'] if preset else (options.get('audioQuality') or fallback))
+    except (TypeError, ValueError):
+        bitrate = fallback
+    return max(64, min(640, bitrate))
+
+
 def transcode(source, target, options=None, start=None, end=None, progress=None, cancel=None, process_callback=None):
     ffmpeg = os.environ.get('CLIPFORGE_FFMPEG') or shutil.which('ffmpeg')
     if not ffmpeg:
@@ -286,19 +491,23 @@ def transcode(source, target, options=None, start=None, end=None, progress=None,
             return {'error': 'Image sources support JPG, PNG, or WebP output.'}
         if media_kind(source) == 'audio' and not audio_only:
             return {'error': 'Audio sources support audio output only.'}
-        video_codec = VIDEO_CODECS.get(str(options.get('videoCodec') or 'h264').lower())
-        audio_codec = AUDIO_CODECS.get(str(options.get('audioCodec') or 'aac').lower())
+        video_key = str(options.get('videoCodec') or 'h264').lower()
+        audio_key = str(options.get('audioCodec') or 'aac').lower()
+        video_codec = VIDEO_CODECS.get(video_key)
+        audio_codec = AUDIO_CODECS.get(audio_key)
         profile = COLOR_PROFILES.get(str(options.get('colorProfile') or 'preserve').lower(), 'invalid')
         if profile == 'invalid':
             return {'error': 'Choose a supported color profile.'}
         if not image_output:
-            normalized_video, normalized_audio = normalize_codecs(options, ext, audio_only)
+            video_key, audio_key = normalize_codecs(options, ext, audio_only)
             if not audio_only:
-                video_codec = VIDEO_CODECS.get(normalized_video)
-            audio_codec = AUDIO_CODECS.get(normalized_audio)
+                video_codec = VIDEO_CODECS.get(video_key)
+            audio_codec = AUDIO_CODECS.get(audio_key)
         if not image_output and (not audio_codec or (not audio_only and not video_codec)):
             return {'error': 'Choose a codec supported by the bundled FFmpeg.'}
-        if video_codec == 'copy' and profile and not audio_only and not image_output:
+        if ext == 'aiff' and audio_codec in ('pcm_s16le', 'pcm_s24le', 'pcm_s32le'):
+            audio_codec = audio_codec.replace('le', 'be')
+        if video_key == 'copy' and profile and not audio_only and not image_output:
             return {'error': 'A color profile cannot be converted while copying the original video stream.'}
         if start is not None or end is not None:
             start, end = float(start or 0), float(end or 0)
@@ -307,6 +516,8 @@ def transcode(source, target, options=None, start=None, end=None, progress=None,
 
         compression_name = str(options.get('compression') or '').lower()
         preset = COMPRESSION_PRESETS.get(compression_name) if compression_name else None
+        if preset and video_key == 'copy' and not audio_only and not image_output:
+            return {'error': 'Compression presets cannot be applied while copying the original video stream. Choose H.264, HEVC, AV1, or VP9.'}
         args = [ffmpeg, '-y', '-hide_banner', '-nostdin']
         if start is not None:
             args += ['-ss', str(start)]
@@ -321,44 +532,84 @@ def transcode(source, target, options=None, start=None, end=None, progress=None,
                 args += ['-frames:v', '1', '-c:v', 'mjpeg', '-q:v', str(quality), '-update', '1']
             elif ext == 'webp':
                 args += ['-frames:v', '1', '-c:v', 'libwebp', '-quality', str(max(20, 100 - quality * 8)), '-update', '1']
+            elif ext in ('tif', 'tiff'):
+                args += ['-frames:v', '1', '-c:v', 'tiff', '-compression_algo', 'lzw', '-update', '1']
+            elif ext == 'bmp':
+                args += ['-frames:v', '1', '-c:v', 'bmp', '-update', '1']
+            elif ext == 'tga':
+                args += ['-frames:v', '1', '-c:v', 'targa', '-update', '1']
             else:
                 args += ['-frames:v', '1', '-c:v', 'png', '-compression_level', '6', '-update', '1']
             if preset:
-                filters.append(f"scale='min({preset['maxHeight']},iw)':-2")
+                filters.append(f"scale='-2:min({preset['maxHeight']},ih)'")
         elif audio_only:
             args += ['-vn', '-c:a', audio_codec]
-            if audio_codec in ('aac', 'libmp3lame', 'libopus', 'libvorbis'):
-                bitrate = preset['audioBitrate'] if preset else int(options.get('audioQuality') or 192)
-                if bitrate not in (64, 96, 128, 160, 192, 256, 320):
-                    bitrate = 192
-                args += ['-b:a', f'{bitrate}k']
+            if audio_codec in ('aac', 'libmp3lame', 'libopus', 'libvorbis', 'ac3', 'eac3', 'mp2', 'wmav2'):
+                args += ['-b:a', f'{target_audio_bitrate(options, preset)}k']
         else:
+            quality = target_video_quality(options, preset)
             args += ['-c:v', video_codec]
-            if video_codec in ('libx264', 'libx265', 'libaom-av1', 'libvpx-vp9', 'mpeg4'):
-                crf = preset['videoCrf'] if preset else int(options.get('videoQuality') or 20)
-                if crf not in (18, 20, 21, 23, 24, 28):
-                    crf = 20
-                args += ['-crf', str(crf)]
-                if video_codec in ('libaom-av1', 'libvpx-vp9'):
+            if video_codec in ('libx264', 'libx265', 'libaom-av1', 'libvpx-vp9', 'libvpx'):
+                args += ['-crf', str(quality)]
+                if video_codec in ('libaom-av1', 'libvpx-vp9', 'libvpx'):
                     args += ['-b:v', '0']
             if video_codec in ('libx264', 'libx265'):
                 args += ['-preset', preset['preset'] if preset else 'fast']
+            elif video_codec == 'libaom-av1':
+                args += ['-cpu-used', '6', '-row-mt', '1']
+            elif video_codec in ('libvpx-vp9', 'libvpx'):
+                args += ['-row-mt', '1', '-deadline', 'good', '-cpu-used', '2']
+            elif video_codec == 'prores_ks':
+                profile_map = {'prores': '2', 'prores_lt': '1', 'prores_hq': '3', 'prores_4444': '4'}
+                pix_fmt = 'yuv444p10le' if video_key == 'prores_4444' else 'yuv422p10le'
+                args += ['-profile:v', profile_map.get(video_key, '2'), '-pix_fmt', pix_fmt, '-vendor', 'apl0']
+            elif video_codec == 'dnxhd':
+                if video_key == 'dnxhr':
+                    args += ['-profile:v', 'dnxhr_hq', '-pix_fmt', 'yuv422p']
+                else:
+                    args += ['-pix_fmt', 'yuv422p']
+            elif video_codec in ('mpeg2video', 'mpeg4'):
+                args += ['-q:v', str({18: 2, 20: 3, 21: 4, 23: 5, 24: 6, 28: 9}.get(quality, 4)), '-pix_fmt', 'yuv420p']
+            elif video_codec == 'libtheora':
+                args += ['-q:v', str({18: 9, 20: 8, 21: 8, 23: 7, 24: 6, 28: 5}.get(quality, 7))]
+            elif video_codec == 'h263':
+                bitrate = {18: 8000, 20: 6000, 21: 5000, 23: 4000, 24: 3000, 28: 1500}.get(quality, 4000)
+                args += ['-b:v', f'{bitrate}k', '-pix_fmt', 'yuv420p']
+                filters.append('scale=352:288:force_original_aspect_ratio=decrease,pad=352:288:(ow-iw)/2:(oh-ih)/2')
+            elif video_codec in ('wmv2', 'flv1'):
+                bitrate = {18: 8000, 20: 6000, 21: 5000, 23: 4000, 24: 3000, 28: 1500}.get(quality, 4000)
+                args += ['-b:v', f'{bitrate}k', '-pix_fmt', 'yuv420p']
             args += ['-c:a', audio_codec]
-            if audio_codec in ('aac', 'libmp3lame'):
-                bitrate = preset['audioBitrate'] if preset else 192
-                args += ['-b:a', f'{bitrate}k']
+            if audio_codec in ('aac', 'libmp3lame', 'libopus', 'libvorbis', 'ac3', 'eac3', 'mp2', 'wmav2'):
+                args += ['-b:a', f'{target_audio_bitrate(options, preset)}k']
             if preset:
                 filters.append(f"scale='-2:min({preset['maxHeight']},ih)'")
             if profile:
                 primaries, transfer, matrix, color_range = profile
-                probe = subprocess.run([ffmpeg, '-hide_banner', '-nostdin', '-i', str(source)], capture_output=True, text=True)
-                probe_text = (probe.stderr or '') + (probe.stdout or '')
-                known_color_tags = ('bt709', 'bt2020', 'smpte170m', 'smpte240m', 'bt470bg', 'bt470m', 'smpte432', 'smpte431')
-                input_override = '' if any(tag in probe_text.lower() for tag in known_color_tags) else ':iall=bt709'
-                filters.append(f'colorspace=all={matrix}{input_override}')
+                if transfer in ('smpte2084', 'arib-std-b67'):
+                    source_tags = probe_color_tags(ffmpeg, source)
+                    filters.append(
+                        'zscale=matrixin={space}:primariesin={primaries}:transferin={trc}:rangein={range}'
+                        ':matrix={out_matrix}:primaries={out_primaries}:transfer={out_trc}:range={out_range}:npl=100'.format(
+                            space=source_tags['space'], primaries=source_tags['primaries'],
+                            trc=source_tags['trc'], range=source_tags['range'],
+                            out_matrix=matrix, out_primaries=primaries, out_trc=transfer,
+                            out_range=color_range
+                        )
+                    )
+                else:
+                    probe_text = subprocess.run([ffmpeg, '-hide_banner', '-nostdin', '-i', str(source)],
+                                                capture_output=True, text=True)
+                    text = (probe_text.stderr or '') + (probe_text.stdout or '')
+                    source_filter = '' if re.search(r'yuv\w*\([^)]*[/,]', text) else ':ispace=bt709:iprimaries=bt709:itrc=bt709:irange=tv'
+                    filters.append(f'colorspace=space={matrix}:primaries={primaries}:trc={transfer}:range={color_range}{source_filter}')
                 args += ['-color_primaries', primaries, '-color_trc', transfer, '-colorspace', matrix, '-color_range', color_range]
+                if transfer in ('smpte2084', 'arib-std-b67') and video_codec in ('libx265', 'libaom-av1', 'libvpx-vp9'):
+                    args += ['-pix_fmt', 'yuv420p10le']
             if ext in ('mp4', 'm4v', 'mov'):
                 args += ['-movflags', '+faststart']
+            if ext == 'mxf':
+                args += ['-ar', '48000']
         if filters:
             args += ['-vf', ','.join(filters)]
         threads = options.get('threads')

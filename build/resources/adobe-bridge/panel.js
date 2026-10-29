@@ -91,7 +91,8 @@
       if (timer) clearTimeout(timer);
       if (response.status === 401) {
         config = null;
-        throw new Error('The YTX security token changed. Restart the YTX Bridge panel or press Reconnect.');
+        scheduleConfigRetry();
+        throw new Error('YTX restarted and issued a new security token. Reconnecting…');
       }
       if (!response.ok) throw new Error('YTX bridge returned HTTP ' + response.status + '.');
       return response.json();
@@ -122,49 +123,86 @@
     });
   }
 
+  // CEP returns system paths as URI-encoded file URLs. cep.fs.readFile wants a
+  // native path, so convert file:///C:/Users/Name/... back to C:\Users\Name\...
+  function nativePath(value) {
+    var text = String(value || '');
+    if (!text) return '';
+    if (/^file:/i.test(text)) {
+      var raw = text.replace(/^file:\/*/i, '');
+      try { raw = decodeURIComponent(raw); } catch (_) {}
+      if (/^\/[A-Za-z]:/.test(raw)) raw = raw.slice(1);
+      if (/^[A-Za-z]:/.test(raw)) return raw.replace(/\//g, '\\');
+      return '\\\\' + raw.replace(/^\/+/, '').replace(/\//g, '\\');
+    }
+    try { text = decodeURIComponent(text); } catch (_) {}
+    return text.replace(/\//g, '\\');
+  }
+
+  function configCandidates() {
+    var candidates = [];
+    function add(folder) {
+      var root = nativePath(folder);
+      if (!root) return;
+      var file = root.replace(/[\\/]+$/, '') + '\\bridge.json';
+      if (candidates.indexOf(file) === -1) candidates.push(file);
+    }
+    try { add(host.getSystemPath('extension')); } catch (_) {}
+    try { add(host.getSystemPath('appData') + '\\YTX'); } catch (_) {}
+    try { add(host.getSystemPath('userData') + '\\YTX'); } catch (_) {}
+    try { add(host.getSystemPath('appData') + '\\Adobe\\YTX'); } catch (_) {}
+    return candidates;
+  }
+
   function readConfigFile() {
     if (!window.cep || !window.cep.fs || typeof window.cep.fs.readFile !== 'function') {
       throw new Error('Adobe CEP file access is unavailable. Restart the Adobe host and reopen YTX Bridge.');
     }
-    var candidates = [];
-    try {
-      var extensionRoot = host.getSystemPath('extension');
-      if (extensionRoot) candidates.push(extensionRoot.replace(/\\/g, '/') + '/bridge.json');
-    } catch (_) {}
-    try {
-      var userData = host.getSystemPath('userData');
-      if (userData) {
-        var root = userData.replace(/\\/g, '/');
-        candidates.push(root + '/YTX/bridge.json', root + '/Adobe/YTX/bridge.json');
-      }
-    } catch (_) {}
-    try {
-      var appData = host.getSystemPath('appData');
-      if (appData) candidates.push(appData.replace(/\\/g, '/') + '/YTX/bridge.json');
-    } catch (_) {}
+    var candidates = configCandidates();
+    var found = [];
     for (var index = 0; index < candidates.length; index++) {
       try {
         var result = window.cep.fs.readFile(candidates[index]);
         if (result && !result.err && result.data) {
           var parsed = JSON.parse(result.data);
-          if (parsed && parsed.port && parsed.token) return parsed;
+          var port = Number(parsed && parsed.port);
+          var token = parsed && String(parsed.token || '');
+          if (port > 0 && token) {
+            parsed.port = port;
+            parsed.token = token;
+            parsed.source = candidates[index];
+            found.push(parsed);
+          }
         }
       } catch (_) {}
     }
-    return null;
+    if (!found.length) return null;
+    found.sort(function (a, b) {
+      var left = Date.parse(a.updatedAt || '') || 0;
+      var right = Date.parse(b.updatedAt || '') || 0;
+      return right - left;
+    });
+    return found[0];
+  }
+
+  function reloadConfig() {
+    config = null;
+    mediaLoadedFor = '';
+    if (configRetry) { window.clearInterval(configRetry); configRetry = null; }
+    return loadConfig();
   }
 
   function scheduleConfigRetry() {
-    if (!configRetry) configRetry = window.setInterval(loadConfig, 4000);
+    if (!configRetry) configRetry = window.setInterval(loadConfig, 2500);
   }
 
   function loadConfig() {
     try {
       var next = readConfigFile();
-      if (!next) throw new Error('Start YTX Studio once to finish bridge setup, then press Reconnect.');
+      if (!next) throw new Error('Waiting for YTX Studio. Start it once and YTX Bridge connects automatically.');
       config = next;
       if (configRetry) { window.clearInterval(configRetry); configRetry = null; }
-      setMessage('Connecting to YTX Studio…');
+      setMessage('YTX Studio found. Connecting…');
       poll();
       startPolling();
       return true;
@@ -341,9 +379,15 @@
         updateMediaButtons();
       });
     }).catch(function (error) {
-      setMessage(error.message, true);
       showConnection({ connected: false });
-      if (!config) scheduleConfigRetry();
+      if (!config) {
+        setMessage(error.message, true);
+        scheduleConfigRetry();
+        return;
+      }
+      if (!/failed to fetch|network|load failed|econnrefused/i.test(String(error.message || ''))) {
+        setMessage(error.message, true);
+      }
     });
   }
 
@@ -369,10 +413,8 @@
   }
 
   node('reconnect').addEventListener('click', function () {
-    config = null;
-    mediaLoadedFor = '';
     setMessage('Reconnecting to YTX Studio…');
-    if (loadConfig()) poll();
+    reloadConfig();
   });
   node('refreshMedia').addEventListener('click', function () {
     if (busy) return;

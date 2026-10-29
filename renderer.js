@@ -1,9 +1,56 @@
 const $ = id => document.getElementById(id);
 const video = $('video');
+const previewAudio = $('previewAudio');
 const FPS = 30;
 const FRAME = 1 / FPS;
 let mediaPath = '', remoteUrl = '', duration = 0, inPoint = 0, outPoint = 0, fullRange = false, format = 'video', zoom = 1;
 let scrubbing = false, scrubPending = null, scrubFrame = 0, pendingSeek = null, availableFormats = { video: [], audio: [] };
+let sourceWidth = 0, sourceHeight = 0, previewHasAudio = false;
+let previewMuted = false;
+try { previewMuted = localStorage.getItem('ytx.previewMuted') === '1'; } catch {}
+
+function resolutionLabel(width, height) {
+  if (!width || !height) return '—';
+  const base = width + ' × ' + height;
+  if (height >= 4320) return base + ' · 8K';
+  if (height >= 2160) return base + ' · 4K';
+  if (height >= 1440) return base + ' · QHD';
+  return base;
+}
+function updateResolution() {
+  $('resolution').textContent = resolutionLabel(sourceWidth, sourceHeight);
+  if ($('sequenceMeta')) $('sequenceMeta').textContent = 'Sequence 01 · ' + (sourceWidth && sourceHeight ? sourceWidth + ' × ' + sourceHeight : '1920 × 1080');
+}
+const VOLUME_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15 9a4 4 0 0 1 0 6M18 6a8 8 0 0 1 0 12"/></svg>';
+const MUTED_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="m16 9 5 6m0-6-5 6"/></svg>';
+function applyMuteState() {
+  video.muted = previewMuted;
+  previewAudio.muted = previewMuted;
+  const button = $('muteBtn');
+  if (!button) return;
+  button.innerHTML = previewMuted ? MUTED_ICON : VOLUME_ICON;
+  button.title = previewMuted ? 'Unmute preview (M)' : 'Mute preview (M)';
+  button.setAttribute('aria-label', previewMuted ? 'Unmute preview' : 'Mute preview');
+  button.setAttribute('aria-pressed', String(previewMuted));
+  button.classList.toggle('muted', previewMuted);
+  try { localStorage.setItem('ytx.previewMuted', previewMuted ? '1' : '0'); } catch {}
+}
+function syncPreviewAudio(play) {
+  if (!previewHasAudio || !previewAudio.src) return;
+  if (Math.abs(previewAudio.currentTime - video.currentTime) > 0.3) previewAudio.currentTime = video.currentTime;
+  previewAudio.playbackRate = video.playbackRate || 1;
+  if (play) previewAudio.play().catch(() => {});
+  else previewAudio.pause();
+}
+function playPreview() {
+  const started = video.play();
+  syncPreviewAudio(true);
+  return started;
+}
+function pausePreview() {
+  video.pause();
+  previewAudio.pause();
+}
 
 function time(s, frames = false) {
   if (!Number.isFinite(s)) s = 0;
@@ -49,23 +96,32 @@ function escapeHtml(v) { return v.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&l
 function loadMedia(file) {
   mediaPath = file.path; remoteUrl = ''; duration = 0; inPoint = 0; outPoint = 0; fullRange = false;
   availableFormats = { video: [], audio: [] };
+  sourceWidth = 0; sourceHeight = 0; previewHasAudio = false;
+  previewAudio.pause(); previewAudio.removeAttribute('src'); previewAudio.load();
   $('downloadQualityWrap').classList.add('hidden'); $('videoQuality').value = '20'; $('audioQuality').value = '192';
   video.crossOrigin = ''; video.src = file.url; $('viewer').classList.add('has-video'); $('videoLoading').classList.remove('hidden');
   $('sourceLabel').textContent = 'LOCAL FILE'; $('mediaItem').className = 'source-card loaded-media';
   const name = file.path.split(/[\\/]/).pop();
   $('mediaItem').innerHTML = '<div class="file-icon">▣</div><div class="loaded-info"><strong>' + escapeHtml(name) + '</strong><small>Ready to edit · Local media</small></div><span class="media-check">✓</span>';
-  showTimeline(name); $('projectName').textContent = name; chooseFormat(format); paint();
+  showTimeline(name); $('projectName').textContent = name; chooseFormat(format); updateResolution(); paint();
 }
 function loadOnline(info, sourceUrl) {
   mediaPath = ''; remoteUrl = sourceUrl; duration = Number(info.duration) || 0; inPoint = 0; outPoint = duration; fullRange = false;
   availableFormats = { video: info.videoFormats || [], audio: info.audioFormats || [] };
+  sourceWidth = Number(info.sourceWidth) || Number(info.width) || 0;
+  sourceHeight = Number(info.sourceHeight) || Number(info.height) || 0;
+  previewHasAudio = Boolean(info.hasAudio);
+  previewAudio.pause();
+  if (info.audioUrl) { previewAudio.src = info.audioUrl; previewAudio.load(); }
+  else { previewAudio.removeAttribute('src'); previewAudio.load(); }
+  previewAudio.muted = previewMuted;
   fillQuality('downloadQuality', availableFormats.video, 'height'); $('downloadQualityWrap').classList.remove('hidden');
   video.crossOrigin = ''; video.src = info.url; $('viewer').classList.add('has-video'); $('videoLoading').classList.remove('hidden');
   $('sourceLabel').textContent = 'ONLINE PREVIEW'; $('mediaItem').className = 'source-card loaded-media';
   $('mediaItem').innerHTML = '<div class="youtube-icon">▶</div><div class="loaded-info"><strong>' + escapeHtml(info.title || 'Online video') + '</strong><small>Streaming preview · not downloaded</small></div><span class="media-check">↗</span>';
   showTimeline(info.title || 'Online video'); $('projectName').textContent = info.title || 'Online video';
-  $('resolution').textContent = info.width && info.height ? info.width + ' × ' + info.height : 'ONLINE';
-  chooseFormat(format); paint(); video.play().catch(() => {});
+  updateResolution();
+  chooseFormat(format); paint(); playPreview().catch(() => {});
 }
 function fillQuality(id, formats, prop) {
   const select = $(id), previous = select.value;
@@ -98,13 +154,18 @@ video.addEventListener('loadedmetadata', () => {
     inPoint = Math.min(inPoint, Math.max(0, duration - FRAME));
     outPoint = Math.min(outPoint || duration, duration);
   }
-  $('videoLoading').classList.add('hidden'); $('resolution').textContent = video.videoWidth + ' × ' + video.videoHeight;
+  if (!sourceWidth || !sourceHeight) { sourceWidth = video.videoWidth; sourceHeight = video.videoHeight; }
+  $('videoLoading').classList.add('hidden'); updateResolution();
   if (pendingSeek !== null) { video.currentTime = Math.min(duration, pendingSeek); pendingSeek = null; } paint();
 });
 video.addEventListener('canplay', () => $('videoLoading').classList.add('hidden'));
 video.addEventListener('waiting', () => $('videoLoading').classList.remove('hidden'));
 video.addEventListener('error', () => $('videoLoading').classList.add('hidden'));
-video.addEventListener('timeupdate', () => { paint(); if (video.currentTime >= outPoint && !video.paused) { video.pause(); video.currentTime = outPoint; } });
+video.addEventListener('timeupdate', () => {
+  paint();
+  if (previewHasAudio && !video.paused && Math.abs(previewAudio.currentTime - video.currentTime) > 0.35) previewAudio.currentTime = video.currentTime;
+  if (video.currentTime >= outPoint && !video.paused) { pausePreview(); video.currentTime = outPoint; }
+});
 function setPlayButton(playing) {
   $('playBtn').setAttribute('aria-label', playing ? 'Pause' : 'Play');
   $('playBtn').title = playing ? 'Pause' : 'Play';
@@ -112,9 +173,20 @@ function setPlayButton(playing) {
     ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h4v14H7zm6 0h4v14h-4z"/></svg>'
     : '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 12 7-12 7z"/></svg>';
 }
-video.addEventListener('play', () => setPlayButton(true));
-video.addEventListener('pause', () => setPlayButton(false));
-$('playBtn').onclick = () => video.paused ? video.play() : video.pause();
+video.addEventListener('play', () => { setPlayButton(true); syncPreviewAudio(true); });
+video.addEventListener('pause', () => { setPlayButton(false); previewAudio.pause(); });
+video.addEventListener('seeking', () => { if (previewHasAudio) previewAudio.currentTime = video.currentTime; });
+video.addEventListener('ratechange', () => { previewAudio.playbackRate = video.playbackRate || 1; });
+video.addEventListener('volumechange', () => { previewAudio.volume = video.volume; });
+$('playBtn').onclick = () => video.paused ? playPreview() : pausePreview();
+$('muteBtn').onclick = () => { previewMuted = !previewMuted; applyMuteState(); };
+document.addEventListener('keydown', event => {
+  if (event.key.toLowerCase() !== 'm' || event.ctrlKey || event.metaKey || event.altKey) return;
+  if (/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName)) return;
+  if (!$('systemScanModal').classList.contains('hidden') || !$('downloadCenter').classList.contains('hidden')) return;
+  previewMuted = !previewMuted; applyMuteState();
+});
+applyMuteState();
 $('backBtn').onclick = () => video.currentTime = Math.max(0, video.currentTime - 5);
 $('forwardBtn').onclick = () => video.currentTime = Math.min(duration, video.currentTime + 5);
 $('markIn').onclick = () => { inPoint = Math.min(video.currentTime, Math.max(0, outPoint - FRAME)); fullRange = false; paint(); };
@@ -187,16 +259,59 @@ function chooseFormat(f) {
   $('downloadQuality').disabled = f !== 'video';
   syncCodecCompatibility();
 }
+const VIDEO_CODECS_BY_CONTAINER = {
+  mp4: ['h264', 'hevc', 'av1', 'mpeg4', 'copy'],
+  m4v: ['h264', 'hevc', 'mpeg4', 'copy'],
+  mov: ['h264', 'hevc', 'prores', 'prores_lt', 'prores_hq', 'prores_4444', 'dnxhd', 'dnxhr', 'mpeg4', 'copy'],
+  mkv: ['h264', 'hevc', 'av1', 'vp9', 'vp8', 'prores', 'prores_hq', 'prores_4444', 'dnxhd', 'dnxhr', 'mpeg2', 'mpeg4', 'theora', 'copy'],
+  webm: ['av1', 'vp9', 'vp8', 'copy'],
+  avi: ['h264', 'mpeg4', 'mpeg2', 'wmv2', 'copy'],
+  ts: ['h264', 'hevc', 'mpeg2', 'mpeg4', 'copy'],
+  m2ts: ['h264', 'hevc', 'mpeg2', 'copy'],
+  mts: ['h264', 'hevc', 'mpeg2', 'copy'],
+  mpg: ['mpeg2', 'mpeg4', 'copy'],
+  mxf: ['dnxhd', 'dnxhr', 'prores', 'prores_hq', 'prores_4444', 'mpeg2', 'copy'],
+  wmv: ['wmv2', 'copy'],
+  flv: ['h264', 'flv1', 'copy'],
+  '3gp': ['h264', 'h263', 'mpeg4', 'copy'],
+  ogv: ['theora', 'vp8', 'copy']
+};
+const AUDIO_CODECS_BY_CONTAINER = {
+  mp3: ['mp3', 'copy'],
+  m4a: ['aac', 'alac', 'copy'],
+  wav: ['pcm', 'pcm24', 'pcm32', 'copy'],
+  flac: ['flac', 'copy'],
+  ogg: ['vorbis', 'opus', 'flac', 'copy'],
+  opus: ['opus', 'copy'],
+  aac: ['aac', 'copy'],
+  ac3: ['ac3', 'eac3', 'copy'],
+  wma: ['wmav2', 'copy'],
+  aiff: ['pcm', 'pcm24', 'pcm32', 'copy'],
+  mp4: ['aac', 'mp3', 'alac', 'ac3', 'eac3', 'copy'],
+  m4v: ['aac', 'mp3', 'alac', 'copy'],
+  mov: ['aac', 'mp3', 'alac', 'pcm', 'pcm24', 'pcm32', 'ac3', 'eac3', 'copy'],
+  mkv: ['aac', 'mp3', 'opus', 'vorbis', 'flac', 'alac', 'pcm', 'pcm24', 'pcm32', 'ac3', 'eac3', 'mp2', 'copy'],
+  webm: ['opus', 'vorbis', 'copy'],
+  avi: ['mp3', 'pcm', 'ac3', 'mp2', 'copy'],
+  ts: ['aac', 'mp3', 'ac3', 'eac3', 'mp2', 'copy'],
+  m2ts: ['aac', 'ac3', 'eac3', 'mp2', 'pcm', 'copy'],
+  mts: ['aac', 'ac3', 'eac3', 'mp2', 'pcm', 'copy'],
+  mpg: ['mp2', 'mp3', 'ac3', 'pcm', 'copy'],
+  mxf: ['pcm', 'pcm24', 'pcm32', 'copy'],
+  wmv: ['wmav2', 'mp3', 'copy'],
+  flv: ['aac', 'mp3', 'copy'],
+  '3gp': ['aac', 'copy'],
+  ogv: ['vorbis', 'opus', 'flac', 'copy']
+};
 function syncCodecCompatibility() {
-  const videoAllowed = { mp4: ['h264','hevc','av1','mpeg4','copy'], mov: ['h264','hevc','prores','mpeg4','copy'], mkv: ['h264','hevc','av1','vp9','prores','mpeg4','copy'], webm: ['av1','vp9','copy'], avi: ['h264','mpeg4','copy'], m4v: ['h264','hevc','mpeg4','copy'], ts: ['h264','hevc','mpeg4','copy'] };
-  const audioAllowed = { mp3: ['mp3','copy'], m4a: ['aac','copy'], wav: ['pcm','copy'], flac: ['flac','copy'], ogg: ['vorbis','opus','copy'], opus: ['opus','copy'] };
-  const audioForVideo = { mp4: ['aac','mp3','copy'], mov: ['aac','mp3','pcm','copy'], mkv: ['aac','mp3','opus','vorbis','flac','pcm','copy'], webm: ['opus','vorbis','copy'], avi: ['mp3','pcm','copy'], m4v: ['aac','mp3','copy'], ts: ['aac','mp3','copy'] };
   function limit(id, allowed) {
     const select = $(id); for (const option of select.options) option.disabled = !allowed.includes(option.value);
     if (!allowed.includes(select.value)) select.value = allowed[0];
   }
-  limit('videoCodec', videoAllowed[$('videoContainer').value] || videoAllowed.mp4);
-  limit('audioCodec', format === 'audio' ? (audioAllowed[$('audioContainer').value] || audioAllowed.mp3) : (audioForVideo[$('videoContainer').value] || audioForVideo.mp4));
+  const container = $('videoContainer').value;
+  limit('videoCodec', VIDEO_CODECS_BY_CONTAINER[container] || VIDEO_CODECS_BY_CONTAINER.mp4);
+  const audioContainer = format === 'audio' ? $('audioContainer').value : container;
+  limit('audioCodec', AUDIO_CODECS_BY_CONTAINER[audioContainer] || AUDIO_CODECS_BY_CONTAINER.mp4);
   if ($('videoCodec').value === 'copy') { $('colorProfile').value = 'preserve'; $('colorProfile').disabled = true; }
   else $('colorProfile').disabled = format !== 'video';
   $('videoFormat').querySelector('small').textContent = `${$('videoContainer').value.toUpperCase()} · ${$('videoCodec').selectedOptions[0].textContent} + ${$('audioCodec').selectedOptions[0].textContent}`;
@@ -271,12 +386,15 @@ $('openTransferCenterBtn').onclick = () => openDownloadCenter('transfers');
 /* Conversion workspace --------------------------------------------------- */
 const FORMAT_LABELS = {
   mp4: 'MP4 · H.264', mov: 'MOV · QuickTime', mkv: 'MKV · Matroska', webm: 'WebM · VP9', avi: 'AVI', m4v: 'M4V', ts: 'MPEG-TS',
+  m2ts: 'M2TS · Blu-ray', mts: 'MTS · AVCHD', mpg: 'MPG · MPEG-2', mxf: 'MXF · ProRes/DNx', wmv: 'WMV · Windows Media',
+  flv: 'FLV · Flash', '3gp': '3GP · Mobile', ogv: 'OGV · Theora',
   mp3: 'MP3 · Audio', m4a: 'M4A · AAC', wav: 'WAV · PCM', flac: 'FLAC · Lossless', ogg: 'OGG · Vorbis', opus: 'Opus · Audio',
-  jpg: 'JPG · Image', png: 'PNG · Image', webp: 'WebP · Image'
+  aac: 'AAC · ADTS', ac3: 'AC-3 · Surround', wma: 'WMA · Windows', aiff: 'AIFF · PCM',
+  jpg: 'JPG · Image', png: 'PNG · Image', webp: 'WebP · Image', bmp: 'BMP · Image', tif: 'TIFF · Image', tga: 'TGA · Image'
 };
-const VIDEO_TARGETS = ['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v', 'ts'];
-const AUDIO_TARGETS = ['mp3', 'm4a', 'wav', 'flac', 'ogg', 'opus'];
-const IMAGE_TARGETS = ['jpg', 'png', 'webp'];
+const VIDEO_TARGETS = ['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v', 'ts', 'm2ts', 'mts', 'mpg', 'mxf', 'wmv', 'flv', '3gp', 'ogv'];
+const AUDIO_TARGETS = ['mp3', 'm4a', 'wav', 'flac', 'ogg', 'opus', 'aac', 'ac3', 'wma', 'aiff'];
+const IMAGE_TARGETS = ['jpg', 'png', 'webp', 'bmp', 'tif', 'tga'];
 const COMPRESSION_COPY = {
   light: 'Light compression keeps near-original detail and trims only the largest files.',
   balanced: 'Balanced reduces size while preserving visual quality for most projects.',
@@ -1049,16 +1167,82 @@ $('openBrowserExtensionBtn').onclick = async () => {
   $('systemSummary').textContent = result.error ? `Could not open folder: ${result.error}` : `Fallback folder: ${result.path}`;
 };
 syncCodecCompatibility();
-$('scanSystemBtn').onclick = async () => {
-  $('systemSummary').textContent = 'Scanning installed apps and available system memory…';
+const scanModal = $('systemScanModal');
+let scanReturnFocus = null;
+function scanStat(label, value, hint = '') {
+  const card = document.createElement('div');
+  card.className = 'scan-stat';
+  const name = document.createElement('span'); name.textContent = label;
+  const main = document.createElement('strong'); main.textContent = value;
+  card.append(name, main);
+  if (hint) { const note = document.createElement('small'); note.textContent = hint; card.appendChild(note); }
+  return card;
+}
+function openSystemScan() {
+  scanReturnFocus = document.activeElement;
+  scanModal.classList.remove('hidden');
+  document.body.classList.add('scan-open');
+  $('scanModalBody').scrollTop = 0;
+  $('scanModalClose').focus({ preventScroll: true });
+}
+function closeSystemScan() {
+  scanModal.classList.add('hidden');
+  document.body.classList.remove('scan-open');
+  if (scanReturnFocus && typeof scanReturnFocus.focus === 'function') scanReturnFocus.focus({ preventScroll: true });
+}
+async function runSystemScan() {
+  openSystemScan();
+  $('scanModalSummary').textContent = 'Scanning installed apps and available system memory…';
+  $('scanModalLead').textContent = 'Checking hardware, Adobe hosts, browsers, and render resources.';
+  $('scanModalStats').replaceChildren();
+  $('systemApps').replaceChildren();
+  $('scanAppCount').textContent = '0';
+  $('scanModalNote').textContent = 'Scanning…';
+  $('scanAgainBtn').disabled = true;
+  $('scanModalBody').scrollTop = 0;
   try {
     const result = await window.studio.scanSystem();
     $('systemSummary').textContent = `${result.cpu} · ${result.cores} cores · ${result.memoryGb} GB RAM (${result.freeMemoryGb} GB free)`;
-    const list = $('systemApps'); list.replaceChildren();
-    for (const app of result.apps) { const row = document.createElement('li'); row.textContent = app.name; const state = document.createElement('span'); state.className = 'app-state'; state.textContent = app.installed ? 'FOUND' : 'NOT FOUND'; row.appendChild(state); list.appendChild(row); }
-    list.classList.remove('hidden');
-  } catch (error) { $('systemSummary').textContent = error.message; }
-};
+    $('scanModalLead').textContent = result.cpu || 'System processor';
+    $('scanModalSummary').textContent = `${String(result.arch || '').toUpperCase()} ${result.platform || ''} · ${result.cores} logical cores · ${result.memoryGb} GB RAM · ${result.freeMemoryGb} GB free`;
+    const performance = result.performance || {};
+    const recommended = String(performance.recommendedCompression || 'balanced');
+    const stats = [
+      ['PROCESSOR', result.cpu || 'Unknown CPU'],
+      ['MEMORY', `${result.memoryGb} GB`, `${result.freeMemoryGb} GB free`],
+      ['RENDER WORKERS', String(performance.workers ?? 1), performance.label || 'Automatic'],
+      ['THREADS PER WORKER', String(performance.threads ?? '')],
+      ['ENCODING MODE', result.sequentialConversion ? 'Sequential' : 'Parallel'],
+      ['RECOMMENDED PRESET', recommended.charAt(0).toUpperCase() + recommended.slice(1)],
+      ['PLATFORM', `${result.platform || ''} · ${result.arch || ''}`]
+    ];
+    const statFragment = document.createDocumentFragment();
+    for (const [label, value, hint] of stats) statFragment.appendChild(scanStat(label, value, hint));
+    $('scanModalStats').appendChild(statFragment);
+    const apps = Array.isArray(result.apps) ? result.apps : [];
+    for (const app of apps) {
+      const row = document.createElement('li');
+      const name = document.createElement('span'); name.textContent = app.name;
+      const kind = document.createElement('small'); kind.textContent = app.kind === 'adobe' ? 'ADOBE' : 'BROWSER';
+      const state = document.createElement('span'); state.className = `app-state ${app.installed ? 'found' : 'missing'}`; state.textContent = app.installed ? 'FOUND' : 'NOT FOUND';
+      row.append(name, kind, state);
+      $('systemApps').appendChild(row);
+    }
+    $('scanAppCount').textContent = `${apps.filter(app => app.installed).length} / ${apps.length}`;
+    $('scanModalNote').textContent = `Scan completed at ${new Date().toLocaleTimeString()}. Results stay on this PC.`;
+  } catch (error) {
+    $('scanModalSummary').textContent = error.message || 'The system scan could not complete.';
+    $('scanModalNote').textContent = 'Close this window and try again.';
+  } finally {
+    $('scanAgainBtn').disabled = false;
+    $('scanModalBody').scrollTop = 0;
+  }
+}
+$('scanSystemBtn').onclick = runSystemScan;
+$('scanAgainBtn').onclick = runSystemScan;
+$('scanModalClose').onclick = closeSystemScan;
+document.querySelectorAll('[data-scan-close]').forEach(element => element.addEventListener('click', closeSystemScan));
+document.addEventListener('keydown', event => { if (event.key === 'Escape' && !scanModal.classList.contains('hidden')) closeSystemScan(); });
 async function startup() {
   const list = $('startupChecks'), items = [['python','Python runtime'],['ytDlp','yt-dlp downloader'],['ffmpeg','FFmpeg'],['adobeBridge','Adobe bridge']];
   try {

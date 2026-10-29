@@ -1,6 +1,6 @@
 !define MUI_WELCOMEPAGE_TITLE "Install YTX Studio"
 !define MUI_WELCOMEPAGE_TEXT "Preview online video, trim a selected range, convert or compress media, and send finished files to Adobe apps.$\r$\n$\r$\nYTX installs for every user on this PC and configures the browser and Adobe integrations selected on the next page.$\r$\n$\r$\nCopyright © 2026 ARYAN ARYA."
-!define YTX_EXTENSION_UPDATE_URL "https://github.com/pixelstoLogic/YTX/releases/latest/download/updates.xml"
+!define YTX_EXTENSION_UPDATE_URL "http://127.0.0.1:62389/updates.xml"
 
 !include nsDialogs.nsh
 
@@ -38,6 +38,20 @@ Var YTXBadge
   ; registry view. Adobe and fallback extension files still belong to the
   ; profile that launched the installer, not to the All Users shell folders.
   SetRegView 64
+  ; Close any still-running YTX Studio so setup never aborts with the
+  ; "already running" dialog. The built-in electron-builder check later in the
+  ; install section stays as a fallback for elevated instances taskkill
+  ; cannot reach.
+  nsExec::Exec `"$SYSDIR\taskkill.exe" /F /T /IM YTX.exe`
+  Pop $0
+  Sleep 800
+!macroend
+
+; The uninstaller runs the same running-app check, so close YTX there too.
+!macro customUnInit
+  nsExec::Exec `"$SYSDIR\taskkill.exe" /F /T /IM YTX.exe`
+  Pop $0
+  Sleep 800
 !macroend
 
 !macro customWelcomePage
@@ -282,12 +296,13 @@ Function YTXRegisterBrowserExtension
   Goto ytx_policy_loop
   ytx_policy_write:
   WriteRegStr HKLM "$R0\ExtensionInstallForcelist" "$R1" "$R3;${YTX_EXTENSION_UPDATE_URL}"
+  WriteRegStr HKLM "$R0\ExtensionSettings" "$R3" '{"$R3":{"installation_mode":"force_installed","update_url":"${YTX_EXTENSION_UPDATE_URL}","override_update_url":true}}'
   ReadRegStr $R9 HKLM "$R0\ExtensionInstallForcelist" "$R1"
   StrCmp $R9 "$R3;${YTX_EXTENSION_UPDATE_URL}" 0 ytx_policy_verify_failed
   WriteRegStr HKLM "Software\YTX\BrowserExtension\Policies\$R8" "Key" "$R0"
   WriteRegStr HKLM "Software\YTX\BrowserExtension\Policies\$R8" "ValueName" "$R1"
   WriteRegStr HKLM "Software\YTX\BrowserExtension\Policies\$R8" "Entry" "$R3;${YTX_EXTENSION_UPDATE_URL}"
-  DetailPrint "Registered the YTX extension policy for $R8 (machine rule $R1)."
+  DetailPrint "Registered the YTX extension and update service policy for $R8 (machine rule $R1)."
   Goto ytx_policy_done
   ytx_policy_verify_failed:
   DetailPrint "Windows did not retain the machine browser policy for $R8."
@@ -326,6 +341,8 @@ Function un.YTXRemoveBrowserExtensionPolicy
   StrCmp $R1 60 ytx_remove_policy_done
   Goto ytx_remove_policy_loop
   ytx_remove_policy_done:
+  DeleteRegValue HKLM "$R0\ExtensionSettings" "$R3"
+  DeleteRegValue HKCU "$R0\ExtensionSettings" "$R3"
   Pop $R9
   Pop $R8
   Pop $R2

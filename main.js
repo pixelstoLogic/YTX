@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, globalShortcut, shell, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Tray, Menu, globalShortcut, shell, nativeImage, screen } = require('electron');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -14,9 +14,9 @@ const GITHUB_REPOSITORY = 'pixelstoLogic/YTX';
 const GITHUB_API = `https://api.github.com/repos/${GITHUB_REPOSITORY}`;
 const GITHUB_RELEASES = `https://github.com/${GITHUB_REPOSITORY}/releases`;
 const MEDIA_EXTENSIONS = {
-  video: ['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v', 'ts', 'mts', 'm2ts', 'wmv', 'flv', '3gp', 'ogv'],
-  audio: ['mp3', 'm4a', 'wav', 'flac', 'ogg', 'opus', 'aac', 'wma', 'aiff', 'aif'],
-  image: ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'tif', 'tiff', 'gif']
+  video: ['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v', 'ts', 'mts', 'm2ts', 'mpg', 'mpeg', 'mxf', 'wmv', 'flv', '3gp', 'ogv'],
+  audio: ['mp3', 'm4a', 'wav', 'flac', 'ogg', 'opus', 'aac', 'ac3', 'wma', 'aiff', 'aif'],
+  image: ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'tif', 'tiff', 'gif', 'tga']
 };
 const MEDIA_FILTER_EXTENSIONS = [...new Set(Object.values(MEDIA_EXTENSIONS).flat())];
 
@@ -77,7 +77,10 @@ app.on('open-url', (event, url) => { event.preventDefault(); acceptProtocolUrl(u
 
 function createWindow(hidden = false) {
   const iconPath = app.isPackaged ? path.join(process.resourcesPath, 'ytx-mark.png') : path.join(__dirname, 'assets', 'ytx-mark.png');
-  const win = new BrowserWindow({ width: 1500, height: 960, minWidth: 1120, minHeight: 720, backgroundColor: '#0d0f12', icon: iconPath, show: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false } });
+  const workArea = screen.getPrimaryDisplay().workAreaSize;
+  const width = Math.max(720, Math.min(1500, workArea.width - 32));
+  const height = Math.max(560, Math.min(960, workArea.height - 48));
+  const win = new BrowserWindow({ width, height, minWidth: 720, minHeight: 560, backgroundColor: '#0d0f12', icon: iconPath, show: false, webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false } });
   mainWindow = win;
   win.once('ready-to-show', () => { if (!hidden) win.show(); });
   win.webContents.on('did-finish-load', flushProtocolUrl);
@@ -106,12 +109,13 @@ app.whenReady().then(() => {
   createTray();
   globalShortcut.register('Control+Alt+Y', () => { if (!mainWindow) createWindow(); else { mainWindow.show(); mainWindow.focus(); } });
   startAdobeBridge().catch(error => console.error('Adobe bridge server failed:', error));
+  integrationManager().startExtensionServer().catch(error => console.error('Browser extension service failed:', error.message));
   ensureAdobeBridgeOnStartup().catch(error => console.error('Adobe bridge repair failed:', error.message));
   createWindow(process.argv.includes('--hidden'));
   ensureBackend().catch(error => console.error('Python bridge failed to start:', error.message));
   app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(false); });
 });
-app.on('before-quit', () => { quitting = true; globalShortcut.unregisterAll(); if (backendProcess && !backendProcess.killed) backendProcess.kill(); if (adobeBridgeServer) adobeBridgeServer.close(); });
+app.on('before-quit', () => { quitting = true; globalShortcut.unregisterAll(); if (backendProcess && !backendProcess.killed) backendProcess.kill(); if (adobeBridgeServer) adobeBridgeServer.close(); try { integrationManager().stopExtensionServer(); } catch {} });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin' && !preferences.keepInTray) app.quit(); });
 
 function createTray() {

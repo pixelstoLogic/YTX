@@ -12,11 +12,18 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const http = require('node:http');
 const { execFile, execFileSync } = require('node:child_process');
 
 const REPOSITORY = 'pixelstoLogic/YTX';
 const EXTENSION_UPDATE_URL = `https://github.com/${REPOSITORY}/releases/latest/download/updates.xml`;
 const EXTENSION_CRX_URL = `https://github.com/${REPOSITORY}/releases/latest/download/ytx-extension.crx`;
+// Chromium force-install requires a real MIME type for the CRX. GitHub release
+// assets are served as application/octet-stream with Content-Disposition:
+// attachment, which Edge/Brave reject. YTX therefore serves the signed package
+// from a fixed loopback port while it is running.
+const EXTENSION_UPDATE_PORT = 62389;
+const EXTENSION_LOCAL_UPDATE_URL = `http://127.0.0.1:${EXTENSION_UPDATE_PORT}/updates.xml`;
 const POLICY_MARKER = 'Software\\YTX\\BrowserExtension';
 
 const BROWSERS = [
@@ -63,10 +70,12 @@ function createIntegrationManager(options) {
   const adobeSource = path.join(resourcesRoot, 'adobe-bridge');
   const localAppData = options.localAppData;
   const appData = options.appData;
-  const updateUrl = options.updateUrl || EXTENSION_UPDATE_URL;
+  const updateUrl = options.updateUrl || EXTENSION_LOCAL_UPDATE_URL;
   const crxUrl = options.crxUrl || EXTENSION_CRX_URL;
   const extensionTarget = path.join(localAppData, 'YTX', 'browser-extension');
   const bridgeTarget = path.join(appData, 'Adobe', 'CEP', 'extensions', 'YTX-Bridge');
+  let updateServer = null;
+  let updateServerReady = null;
 
   function roots() {
     return [
@@ -150,26 +159,157 @@ function createIntegrationManager(options) {
     return detected;
   }
 
+  function extensionIdFromManifest(manifest) {
+    if (manifest && manifest.key) {
+      const publicKey = Buffer.from(manifest.key, 'base64');
+      const digest = crypto.createHash('sha256').update(publicKey).digest('hex').slice(0, 32);
+      return digest.replace(/[0-9a-f]/g, character => String.fromCharCode(97 + parseInt(character, 16)));
+    }
+    return '';
+  }
+
   function readExtensionInfo() {
     const manifestPath = path.join(extensionSource, 'manifest.json');
     if (!fs.existsSync(manifestPath)) throw new Error(`The bundled browser extension is missing: ${manifestPath}`);
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    let extensionId = '';
-    if (manifest.key) {
-      const publicKey = Buffer.from(manifest.key, 'base64');
-      const digest = crypto.createHash('sha256').update(publicKey).digest('hex').slice(0, 32);
-      extensionId = digest.replace(/[0-9a-f]/g, character => String.fromCharCode(97 + parseInt(character, 16)));
-    }
+    let extensionId = extensionIdFromManifest(manifest);
     if (!extensionId) {
       try { extensionId = fs.readFileSync(path.join(extensionSource, 'extension-id.txt'), 'utf8').trim(); } catch {}
     }
     return { manifest, extensionId, version: manifest.version || '', target: extensionTarget };
   }
 
+  function extensionPackage() {
+    for (const root of [extensionTarget, extensionSource]) {
+      const manifestPath = path.join(root, 'manifest.json');
+      const crxPath = path.join(root, 'ytx-extension.crx');
+      if (!fs.existsSync(manifestPath) || !fs.existsSync(crxPath)) continue;
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      let extensionId = extensionIdFromManifest(manifest);
+      if (!extensionId) {
+        try { extensionId = fs.readFileSync(path.join(root, 'extension-id.txt'), 'utf8').trim(); } catch {}
+      }
+      if (extensionId && manifest.version) {
+        return { root, manifest, crxPath, extensionId, version: String(manifest.version) };
+      }
+    }
+    throw new Error('The signed YTX browser extension is missing. Reinstall YTX Studio to restore it.');
+  }
+
   function copyDirectory(source, target) {
     if (!fs.existsSync(source)) throw new Error(`Missing integration resources: ${source}`);
     fs.mkdirSync(target, { recursive: true });
     fs.cpSync(source, target, { recursive: true, force: true });
+  }
+
+  function updateManifestXml(pkg, origin) {
+    return `<?xml version="1.0" encoding="UTF-8"?>\n`
+      + '<gupdate xmlns="http://www.google.com/update2/response" protocol="2.0">\n'
+      + `  <app appid="${pkg.extensionId}">\n`
+      + `    <updatecheck codebase="${origin}/ytx-extension.crx" version="${pkg.version}" />\n`
+      + '  </app>\n'
+      + '</gupdate>\n';
+  }
+
+  function extensionInstallPage(pkg) {
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">`
+      + '<title>YTX browser helper</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b0d10;color:#e9ecf1;font:15px/1.55 "Segoe UI",Arial,sans-serif}main{max-width:620px;padding:34px;border:1px solid #2a2e36;border-radius:16px;background:#12151a}h1{margin:0 0 6px;font-size:24px}p{color:#a9aeb9}a.button{display:inline-block;margin-top:12px;padding:11px 18px;border-radius:9px;background:#d4ff46;color:#15180d;font-weight:700;text-decoration:none}code{color:#d4ff46}small{color:#7d838e}</style></head><body><main>'
+      + '<h1>YTX browser helper</h1>'
+      + `<p>Version <code>${pkg.version}</code> is ready. Extension ID <code>${pkg.extensionId}</code>.</p>`
+      + '<p>YTX has registered the helper with your Chromium browser. Close the browser completely, reopen it, and the YTX button appears on YouTube videos, Shorts, and live pages.</p>'
+      + '<p>If the browser still does not show the helper, open its extensions page, enable Developer mode, and use <b>Load unpacked</b> with the folder below.</p>'
+      + `<p><small>${extensionTarget.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</small></p>`
+      + '<a class="button" href="/ytx-extension.crx">Download the signed helper</a>'
+      + '</main></body></html>';
+  }
+
+  function probeExistingUpdateServer() {
+    return new Promise(resolve => {
+      const request = http.get({ host: '127.0.0.1', port: EXTENSION_UPDATE_PORT, path: '/health', timeout: 1500 }, response => {
+        let body = '';
+        response.setEncoding('utf8');
+        response.on('data', chunk => { body += chunk; });
+        response.on('end', () => {
+          try {
+            const data = JSON.parse(body);
+            if (data && data.app === 'ytx-extension-update') {
+              resolve({ ok: true, external: true, url: updateUrl, port: EXTENSION_UPDATE_PORT, extensionId: data.extensionId, version: data.version });
+              return;
+            }
+          } catch {}
+          resolve({ ok: false });
+        });
+      });
+      request.on('timeout', () => { request.destroy(); resolve({ ok: false }); });
+      request.on('error', () => resolve({ ok: false }));
+    });
+  }
+
+  function startExtensionServer() {
+    if (updateServerReady) return updateServerReady;
+    updateServerReady = new Promise(async resolve => {
+      let pkg;
+      try { pkg = extensionPackage(); }
+      catch (error) { updateServerReady = null; resolve({ ok: false, error: error.message }); return; }
+
+      const server = http.createServer((request, response) => {
+        const pathname = new URL(request.url || '/', `http://127.0.0.1:${EXTENSION_UPDATE_PORT}`).pathname.toLowerCase();
+        const headers = { 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*', 'X-YTX-Version': pkg.version };
+        if (pathname === '/health') {
+          const body = JSON.stringify({ app: 'ytx-extension-update', extensionId: pkg.extensionId, version: pkg.version });
+          response.writeHead(200, { ...headers, 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body) });
+          response.end(body);
+          return;
+        }
+        if (pathname === '/updates.xml' || pathname === '/updates') {
+          const body = updateManifestXml(pkg, `http://127.0.0.1:${EXTENSION_UPDATE_PORT}`);
+          response.writeHead(200, { ...headers, 'Content-Type': 'text/xml; charset=utf-8', 'Content-Length': Buffer.byteLength(body) });
+          response.end(body);
+          return;
+        }
+        if (pathname === '/ytx-extension.crx') {
+          let size = 0;
+          try { size = fs.statSync(pkg.crxPath).size; } catch {}
+          if (!size) { response.writeHead(404, headers); response.end('Not found'); return; }
+          response.writeHead(200, { ...headers, 'Content-Type': 'application/x-chrome-extension', 'Content-Length': size });
+          const stream = fs.createReadStream(pkg.crxPath);
+          stream.on('error', () => response.destroy());
+          stream.pipe(response);
+          return;
+        }
+        if (pathname === '/install' || pathname === '/') {
+          const body = extensionInstallPage(pkg);
+          response.writeHead(200, { ...headers, 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': Buffer.byteLength(body) });
+          response.end(body);
+          return;
+        }
+        response.writeHead(404, headers);
+        response.end('Not found');
+      });
+
+      server.once('error', async error => {
+        if (error.code === 'EADDRINUSE') {
+          const existing = await probeExistingUpdateServer();
+          if (existing.ok) { updateServerReady = Promise.resolve(existing); resolve(existing); return; }
+        }
+        updateServerReady = null;
+        resolve({ ok: false, error: `The local extension service could not start on port ${EXTENSION_UPDATE_PORT}: ${error.message}` });
+      });
+
+      server.listen(EXTENSION_UPDATE_PORT, '127.0.0.1', () => {
+        updateServer = server;
+        resolve({ ok: true, url: updateUrl, port: EXTENSION_UPDATE_PORT, extensionId: pkg.extensionId, version: pkg.version });
+      });
+    });
+    return updateServerReady;
+  }
+
+  function stopExtensionServer() {
+    if (updateServer) {
+      try { updateServer.close(); } catch {}
+      updateServer = null;
+    }
+    updateServerReady = null;
   }
 
   function findPolicySlot(root, policyKey, entry) {
@@ -205,7 +345,18 @@ function createIntegrationManager(options) {
     if (!browser.policy) return { ok: false, browser: browser.id, name: browser.name, message: 'This browser does not expose a managed policy key.' };
     const entry = `${extensionId};${updateUrl}`;
     const policyKey = `${browser.policy}\\ExtensionInstallForcelist`;
+    const settingsKey = `${browser.policy}\\ExtensionSettings`;
+    const settingsValue = JSON.stringify({
+      [extensionId]: { installation_mode: 'force_installed', update_url: updateUrl, override_update_url: true }
+    });
     const errors = [];
+
+    function rememberSettings(root) {
+      try {
+        regSet(root, settingsKey, extensionId, settingsValue);
+        return regQuery(root, settingsKey, extensionId).toLowerCase() === settingsValue.toLowerCase();
+      } catch { return false; }
+    }
 
     // Machine policy survives user changes and needs no Developer mode. It is
     // the primary path; a per-user policy is only a fallback on locked PCs.
@@ -214,8 +365,9 @@ function createIntegrationManager(options) {
       try {
         regSet('HKLM', policyKey, String(machine.slot), entry);
         if (regQuery('HKLM', policyKey, String(machine.slot)).toLowerCase() === entry.toLowerCase()) {
+          const settings = rememberSettings('HKLM');
           writePolicyMarker('HKLM', browser, entry, machine.slot);
-          return policyResult(browser, machine, 'HKLM');
+          return { ...policyResult(browser, machine, 'HKLM'), settings, settingsKey, settingsValue };
         }
         errors.push('Windows did not retain the machine policy.');
       } catch (error) { errors.push(error.message); }
@@ -228,8 +380,9 @@ function createIntegrationManager(options) {
       try {
         regSet('HKCU', policyKey, String(user.slot), entry);
         if (regQuery('HKCU', policyKey, String(user.slot)).toLowerCase() === entry.toLowerCase()) {
+          const settings = rememberSettings('HKCU');
           writePolicyMarker('HKCU', browser, entry, user.slot);
-          return policyResult(browser, user, 'HKCU');
+          return { ...policyResult(browser, user, 'HKCU'), scope: 'user', settings, settingsKey, settingsValue };
         }
         errors.push('Windows did not retain the user policy.');
       } catch (error) { errors.push(error.message); }
@@ -246,6 +399,8 @@ function createIntegrationManager(options) {
       name: browser.name,
       needsElevation: true,
       policyKey,
+      settingsKey,
+      settingsValue,
       slot: machine.slot,
       entry,
       message: errors[0] || 'Administrator approval is required to register this browser.'
@@ -295,6 +450,16 @@ function createIntegrationManager(options) {
       for (const entry of entries) lines.push(`"${entry.slot}"="${escapeReg(entry.entry)}"`);
       lines.push('');
     }
+    const settingsGroups = new Map();
+    for (const item of pending) {
+      if (!item.settingsKey || !item.settingsValue) continue;
+      if (!settingsGroups.has(item.settingsKey)) settingsGroups.set(item.settingsKey, item.settingsValue);
+    }
+    for (const [settingsKey, settingsValue] of settingsGroups) {
+      lines.push(`[HKEY_LOCAL_MACHINE\\${settingsKey}]`);
+      lines.push(`"${extensionId}"="${escapeReg(settingsValue)}"`);
+      lines.push('');
+    }
     lines.push('[HKEY_LOCAL_MACHINE\\Software\\YTX\\BrowserExtension]');
     lines.push(`"ExtensionId"="${escapeReg(extensionId)}"`);
     lines.push(`"UpdateUrl"="${escapeReg(updateUrl)}"`);
@@ -325,19 +490,24 @@ function createIntegrationManager(options) {
 
     return pending.map(item => {
       const verified = regQuery('HKLM', item.policyKey, String(item.slot));
+      const settings = item.settingsKey
+        ? regQuery('HKLM', item.settingsKey, extensionId).toLowerCase() === String(item.settingsValue || '').toLowerCase()
+        : false;
       return verified.toLowerCase() === item.entry.toLowerCase()
-        ? { ok: true, browser: item.browser, name: item.name, scope: 'machine', elevated: true, slot: item.slot, message: 'Extension policy installed with administrator approval.' }
+        ? { ok: true, browser: item.browser, name: item.name, scope: 'machine', elevated: true, slot: item.slot, settings, message: 'Extension policy installed with administrator approval.' }
         : { ok: false, browser: item.browser, name: item.name, needsElevation: true, message: 'Windows accepted the request but the machine policy is not present.' };
     });
   }
 
-  function installBrowserExtension(request = {}) {
+  async function installBrowserExtension(request = {}) {
     try {
+      const service = await startExtensionServer();
+      if (!service.ok) return { error: service.error || 'The local browser-extension service could not start.' };
       const info = readExtensionInfo();
       if (!info.extensionId) return { error: 'The extension package has no signing key. Rebuild the YTX installer.' };
       copyDirectory(extensionSource, extensionTarget);
       fs.writeFileSync(path.join(extensionTarget, 'extension-id.txt'), info.extensionId + '\n', 'utf8');
-      fs.writeFileSync(path.join(extensionTarget, 'updates.xml'), `<?xml version="1.0" encoding="UTF-8"?>\n<gupdate xmlns="http://www.google.com/update2/response" protocol="2.0">\n  <app appid="${info.extensionId}">\n    <updatecheck codebase="${crxUrl}" version="${info.version}" />\n  </app>\n</gupdate>\n`, 'utf8');
+      fs.writeFileSync(path.join(extensionTarget, 'updates.xml'), updateManifestXml(info, `http://127.0.0.1:${EXTENSION_UPDATE_PORT}`), 'utf8');
 
       const detected = detectBrowsers();
       const requested = Array.isArray(request.browserIds) && request.browserIds.length
@@ -398,13 +568,15 @@ function createIntegrationManager(options) {
         version: info.version,
         path: extensionTarget,
         updateUrl,
+        serviceUrl: service.url || updateUrl,
+        serviceRunning: true,
         scope: machineSuccess.length ? 'machine' : userSuccess.length ? 'user' : '',
         elevated,
         results,
         restartedBrowserRequired: successful.length > 0,
         needsElevation,
         message: successful.length
-          ? `YTX ${info.version} is registered in ${names}. Restart ${successful.length === 1 ? 'that browser' : 'those browsers'} to finish installation.`
+          ? `YTX ${info.version} is registered in ${names}. Close ${successful.length === 1 ? 'that browser' : 'those browsers'} completely and reopen ${successful.length === 1 ? 'it' : 'them'} to finish installation.`
           : needsElevation
             ? 'Windows requires administrator approval to register the browser extension. Select Authorize browser integration and approve the Windows prompt.'
             : 'No supported browser was found. Install Chrome, Edge, Brave, Vivaldi, or Opera and run the setup again.'
@@ -431,7 +603,10 @@ function createIntegrationManager(options) {
       for (const root of ['HKLM', 'HKCU']) {
         for (const slot of collectPolicyValues(root, browser, info.extensionId)) {
           if (root === 'HKLM') machineCleanup.push({ policyKey: `${browser.policy}\\ExtensionInstallForcelist`, slot });
-          else regDelete('HKCU', `${browser.policy}\\ExtensionInstallForcelist`, String(slot));
+          else {
+            regDelete('HKCU', `${browser.policy}\\ExtensionInstallForcelist`, String(slot));
+            regDelete('HKCU', `${browser.policy}\\ExtensionSettings`, info.extensionId);
+          }
           removed.push({ browser: browser.id, scope: root === 'HKLM' ? 'machine' : 'user', slot });
         }
       }
@@ -446,6 +621,11 @@ function createIntegrationManager(options) {
       for (const [policyKey, slots] of grouped) {
         lines.push(`[HKEY_LOCAL_MACHINE\\${policyKey}]`);
         for (const slot of slots) lines.push(`"${slot}"=-`);
+        lines.push('');
+      }
+      for (const browser of BROWSERS) {
+        lines.push(`[HKEY_LOCAL_MACHINE\\${browser.policy}\\ExtensionSettings]`);
+        lines.push(`"${info.extensionId}"=-`);
         lines.push('');
       }
       lines.push('[HKEY_LOCAL_MACHINE\\Software\\YTX\\BrowserExtension]');
@@ -563,21 +743,76 @@ function createIntegrationManager(options) {
     };
   }
 
+  function browserUserDataRoots(browser) {
+    const local = process.env.LOCALAPPDATA || '';
+    const roaming = process.env.APPDATA || '';
+    const map = {
+      chrome: [path.join(local, 'Google', 'Chrome', 'User Data')],
+      edge: [path.join(local, 'Microsoft', 'Edge', 'User Data')],
+      brave: [path.join(local, 'BraveSoftware', 'Brave-Browser', 'User Data')],
+      vivaldi: [path.join(local, 'Vivaldi', 'User Data')],
+      opera: [path.join(roaming, 'Opera Software', 'Opera Stable'), path.join(roaming, 'Opera Software', 'Opera GX Stable')]
+    };
+    return (map[browser.id] || []).filter(folder => folder && fs.existsSync(folder));
+  }
+
+  function findInstalledExtension(browser, extensionId) {
+    const profiles = [];
+    for (const root of browserUserDataRoots(browser)) {
+      let entries = [];
+      try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { continue; }
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const profileRoot = path.join(root, entry.name);
+        if (!fs.existsSync(path.join(profileRoot, 'Preferences')) && !fs.existsSync(path.join(profileRoot, 'Secure Preferences'))) continue;
+        const versionRoot = path.join(profileRoot, 'Extensions', extensionId);
+        if (!fs.existsSync(versionRoot)) continue;
+        let versions = [];
+        try { versions = fs.readdirSync(versionRoot).filter(version => fs.existsSync(path.join(versionRoot, version, 'manifest.json'))); } catch {}
+        if (versions.length) {
+          versions.sort((left, right) => left.localeCompare(right, undefined, { numeric: true }));
+          profiles.push({ profile: entry.name, version: versions[versions.length - 1] });
+        }
+      }
+    }
+    return { installed: profiles.length > 0, profiles };
+  }
+
   function getBrowserExtensionStatus() {
     let info = null;
     try { info = readExtensionInfo(); } catch (error) { return { installed: false, error: error.message }; }
+    const detected = detectBrowsers();
     const policies = [];
     for (const browser of BROWSERS) {
-      let installed = false;
+      let policyInstalled = false;
       let scope = '';
+      let policyValue = '';
       for (const root of ['HKLM', 'HKCU']) {
         for (let slot = 1; slot <= 60; slot++) {
           const current = regQuery(root, `${browser.policy}\\ExtensionInstallForcelist`, String(slot));
-          if (current.toLowerCase().includes(info.extensionId.toLowerCase())) { installed = true; scope = root === 'HKLM' ? 'machine' : 'user'; break; }
+          if (current.toLowerCase().includes(info.extensionId.toLowerCase())) {
+            policyInstalled = true;
+            scope = root === 'HKLM' ? 'machine' : 'user';
+            policyValue = current;
+            break;
+          }
         }
-        if (installed) break;
+        if (policyInstalled) break;
       }
-      policies.push({ id: browser.id, name: browser.name, installed, scope });
+      const profileState = findInstalledExtension(browser, info.extensionId);
+      const browserInfo = detected.find(item => item.id === browser.id);
+      policies.push({
+        id: browser.id,
+        name: browser.name,
+        installed: policyInstalled,
+        registered: policyInstalled,
+        scope,
+        updateUrl: policyValue.split(';').slice(1).join(';'),
+        detected: Boolean(browserInfo && browserInfo.installed),
+        extensionInstalled: profileState.installed,
+        installedVersion: profileState.profiles.length ? profileState.profiles[0].version : '',
+        profiles: profileState.profiles
+      });
     }
     const machine = policies.filter(item => item.scope === 'machine');
     return {
@@ -586,9 +821,12 @@ function createIntegrationManager(options) {
       extensionId: info.extensionId,
       version: info.version,
       updateUrl,
+      serviceUrl: updateUrl,
       policies,
+      active: policies.filter(item => item.extensionInstalled).map(item => item.id),
       scope: machine.length ? 'machine' : policies.some(item => item.scope === 'user') ? 'user' : '',
-      registered: policies.some(item => item.installed)
+      registered: policies.some(item => item.registered),
+      totalInstalled: policies.filter(item => item.extensionInstalled).length
     };
   }
 
@@ -606,6 +844,8 @@ function createIntegrationManager(options) {
     installBrowserExtension,
     removeBrowserExtension,
     getBrowserExtensionStatus,
+    startExtensionServer,
+    stopExtensionServer,
     detectAdobeHosts,
     installAdobeBridge,
     getAdobeBridgeStatus,
@@ -615,4 +855,4 @@ function createIntegrationManager(options) {
   };
 }
 
-module.exports = { createIntegrationManager, EXTENSION_UPDATE_URL, EXTENSION_CRX_URL };
+module.exports = { createIntegrationManager, EXTENSION_UPDATE_URL, EXTENSION_CRX_URL, EXTENSION_LOCAL_UPDATE_URL, EXTENSION_UPDATE_PORT };

@@ -1,5 +1,23 @@
 # YTX Studio changelog
 
+## 1.4.0 — 2026-10-29
+
+- Expanded export and conversion to the full Adobe and broadcast codec set: Apple ProRes 422/LT/HQ/4444, Avid DNxHD/DNxHR (with proper MXF and QuickTime packaging), MPEG-2, MPEG-4 Part 2, Theora, Windows Media Video 8, H.263, and Sorenson Spark (FLV1), alongside H.264, H.265, AV1, VP9, and VP8.
+- Added 15 output containers — MP4, MOV, MKV, WebM, AVI, M4V, MXF, M2TS (Blu-ray/AVCHD), MTS, MPEG-TS, MPEG Program Stream, WMV, FLV, 3GPP, and Ogg Theora — with per-container codec compatibility so impossible combinations cannot be selected.
+- Added a wider color pipeline: Rec. 709, sRGB, Rec. 2020 SDR, Rec. 2020 HLG, Rec. 2020 PQ (HDR10), Display P3, DCI-P3, SMPTE 170M, BT.470 BG, SMPTE 240M, and linear light. HDR targets use bit-depth-preserving zscale so HLG and HDR10 exports keep correct 10-bit tagging.
+- Added audio codecs ALAC, PCM 24/32-bit, AC-3, E-AC-3, MP2, and WMA v2, plus AIFF, ADTS AAC, and AC-3 containers and bitrates up to 640 kbps.
+- Added image conversions also to BMP, TIFF with LZW, and TGA, and preview frame exports can now use every raster target.
+- Rewrote the `colorspace` handling to read each source's incoming tags, so untagged SDR files no longer fail and color stays faithful through conversions.
+- Fixed MPEG-2/DNx legacy formats: MXF audio is forced to 48 kHz, AIFF exports switch to big-endian PCM, and H.263 output is rescaled to a valid CIF picture size.
+- Downloads now recover when YouTube offers no muxable "best" pair: video and highest-quality audio are fetched separately and merged transparently for trimmed and full segments, so export and Adobe handoff keep working.
+- Fixed 4K sources showing as 1080p: the program monitor now reads the real source size and labels QHD/4K/SD8K correctly, and the sequence metadata follows the source resolution.
+- Added preview sound with frame-accurate audio/video sync, drift correction, playback-rate following, and a mute/unmute button (or press M) whose state is remembered between sessions.
+- Rebuilt the "Analyze this system" report as a real dialog with hardware, render-worker, and encoding-mode stats, detected Adobe apps and browsers, scan time, and a Repeat scan button; it now closes with the X button, Esc, or the backdrop and restores keyboard focus.
+- Responsive refresh across editor and conversion: the shell now adapts from ultra-wide down to 720 px windows — export and source panels reflow to two columns beneath the monitor, panels stack with the preview first on narrow windows, the top bar collapses to icons, queue rows reflow, and the converter moves to a stacked layout with side-by-side settings. Window minimums dropped to 720×560 and large displays gain extra breathing room.
+- Browser-extension installation now self-hosts: YTX serves the signed CRX from a local update service with the correct Chromium MIME type, and Chromium `ExtensionSettings` policies force-install from that service, so GitHub's attachment downloads no longer block installation.
+- Setup no longer cancels when YTX Studio is still open: the installer closes a running app automatically before installing (and the uninstaller does the same), so the "already running" stop can no longer abort an update.
+- The Adobe bridge panel auto-connects while YTX is running, converts CEP file paths to native ones, retries automatically, and refreshes its token without a manual reconnect.
+
 ## 1.3.0 — 2026-10-28
 
 - Rebuilt the conversion workspace with drag-and-drop intake, a preview queue with thumbnails, per-file output format selection, and a hardware-aware performance readout.

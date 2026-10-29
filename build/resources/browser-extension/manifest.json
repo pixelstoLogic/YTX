@@ -1,7 +1,8 @@
 {
   "manifest_version": 3,
   "name": "YTX YouTube Trim Handoff",
-  "version": "1.3.0",
+  "version": "1.4.0",
+  "update_url": "http://127.0.0.1:62389/updates.xml",
   "description": "Open a YouTube video or Short in YTX Studio to trim and export.",
   "permissions": [],
   "icons": {
