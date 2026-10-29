@@ -38,13 +38,26 @@ Var YTXBadge
   ; registry view. Adobe and fallback extension files still belong to the
   ; profile that launched the installer, not to the All Users shell folders.
   SetRegView 64
-  ; Close any still-running YTX Studio so setup never aborts with the
-  ; "already running" dialog. The built-in electron-builder check later in the
-  ; install section stays as a fallback for elevated instances taskkill
-  ; cannot reach.
+  ; Close any still-running YTX Studio before the wizard is even interacted
+  ; with, so nothing inherits a stale in-use file.
   nsExec::Exec `"$SYSDIR\taskkill.exe" /F /T /IM YTX.exe`
   Pop $0
   Sleep 800
+!macroend
+
+; Replace electron-builder's built-in running-app dialogs with a silent
+; force close. The default check probes process paths and can misfire
+; ("cannot be closed" while YTX.exe is not actually running), which has
+; cancelled installs; taskkill cannot false-positive on a name, and the
+; per-machine installer is elevated, so nothing is left for it to miss.
+!macro customCheckAppRunning
+  nsExec::Exec `"$SYSDIR\taskkill.exe" /F /T /IM YTX.exe`
+  Pop $0
+  Sleep 1000
+  ; Second pass catches an instance that re-spawned while the wizard was open.
+  nsExec::Exec `"$SYSDIR\taskkill.exe" /F /T /IM YTX.exe`
+  Pop $0
+  Sleep 500
 !macroend
 
 ; The uninstaller runs the same running-app check, so close YTX there too.
